@@ -47,6 +47,8 @@ async function fetchJson(url, timeoutMs = 12_000) {
 }
 
 function flagValue(field) {
+  // GoPlus reports transfer_hook as a list of hook programs: empty means none.
+  if (Array.isArray(field)) return field.length > 0;
   const v = field && typeof field === 'object' ? field.status : field;
   if (v === true || v === 1 || v === '1') return true;
   if (v === false || v === 0 || v === '0') return false;

@@ -99,3 +99,12 @@ test('severity normalization preserves danger blocks', async t => {
   const result = await scan(t, { ...rug, risks:[{ name:'risk',level:' Danger ' }] }, go);
   assert.equal(result.ok,false);
 });
+
+test('GoPlus transfer_hook list format is parsed (empty = none, non-empty = hook)', async () => {
+  const { validateGoReport } = await import('../rugScanner.js');
+  const real = { ...clear, non_transferable: '0', transfer_hook: [] };
+  assert.doesNotThrow(() => validateGoReport({ code: 1, result: { [mint]: real } }, mint));
+  const hooked = { ...clear, transfer_hook: [{ address: 'x' }] };
+  assert.doesNotThrow(() => validateGoReport({ code: 1, result: { [mint]: hooked } }, mint));
+  assert.throws(() => validateGoReport({ code: 1, result: { [mint]: { ...clear, transfer_hook: 'junk' } } }, mint));
+});

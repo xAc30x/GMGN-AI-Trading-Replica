@@ -13,6 +13,7 @@ import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
+import { loadLivePositions, recordLivePosition, saveLivePositions } from './positions';
 import { fetchHealth } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
 import { isPublicSolanaRpc } from './solana/constants';
@@ -46,7 +47,7 @@ export default function App() {
   const [latency, setLatency] = useState(233);
   const [buyAmount, setBuyAmount] = useState(0.01);
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
-  const [positions, setPositions] = useState<Position[]>(INITIAL_POSITIONS);
+  const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
   const [buyToken, setBuyToken] = useState<ScreenToken | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -71,12 +72,20 @@ export default function App() {
       .catch(() => setLiveReady(false));
   }, []);
 
+  useEffect(() => {
+    try { saveLivePositions(positions); }
+    catch { setToast('Position storage unavailable. Keep transaction signatures before closing this page.'); }
+  }, [positions]);
+
+  const visiblePositions = positions.filter(p => mode === 'SHADOW'
+    ? p.demo
+    : !p.demo && p.walletAddress === wallet.publicKey?.toBase58());
   const awaiting = tokens.filter((t) => t.decision === 'buy').length;
   const exposure = useMemo(
-    () => positions.reduce((s, p) => s + p.sizeSol, 0),
-    [positions],
+    () => visiblePositions.reduce((s, p) => s + p.sizeSol, 0),
+    [visiblePositions],
   );
-  const escapeAlerts = positions.filter((p) => p.alert || p.pnlPct < -10).length;
+  const escapeAlerts = visiblePositions.filter((p) => p.demo && (p.alert || p.pnlPct < -10)).length;
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -158,9 +167,9 @@ export default function App() {
         `${tag}: ${token.symbol} · ${amount} ${chain} · intent only (no SL/TP orders).`,
       );
       setPositions((prev) => {
-        if (prev.some((p) => p.symbol === token.symbol)) {
+        if (prev.some((p) => p.demo && p.chain === chain && p.symbol === token.symbol)) {
           return prev.map((p) =>
-            p.symbol === token.symbol ? { ...p, sizeSol: p.sizeSol + amount } : p,
+            p.demo && p.chain === chain && p.symbol === token.symbol ? { ...p, sizeSol: p.sizeSol + amount } : p,
           );
         }
         return [
@@ -196,34 +205,18 @@ export default function App() {
         'live',
         `SOL wallet swap: ${token.symbol} · ${amount} SOL · tx ${meta.hash?.slice(0, 10) || '?'}…`,
       );
-      setPositions((prev) => {
-        if (prev.some((p) => p.symbol === token.symbol)) {
-          return prev.map((p) =>
-            p.symbol === token.symbol
-              ? {
-                  ...p,
-                  sizeSol: p.sizeSol + amount,
-                  address: meta.tokenAddress || p.address,
-                  chain,
-                  demo: false,
-                }
-              : p,
-          );
-        }
-        return [
-          ...prev,
-          {
-            id: `p${Date.now()}`,
-            symbol: token.symbol,
-            address: meta.tokenAddress,
-            pnlPct: 0,
-            sizeSol: amount,
-            entryAge: '0m',
-            chain,
-            demo: false,
-          },
-        ];
-      });
+      setPositions(prev => recordLivePosition(prev, {
+        id: 'live-' + meta.hash,
+        symbol: token.symbol,
+        address: meta.tokenAddress,
+        walletAddress: meta.walletAddress,
+        signature: meta.hash,
+        pnlPct: 0,
+        sizeSol: amount,
+        entryAge: '0m',
+        chain: 'SOL',
+        demo: false,
+      }));
       showToast(meta.hash ? `Wallet swap landed · ${meta.hash.slice(0, 12)}…` : 'Wallet swap submitted');
       window.setTimeout(() => setBuyToken(null), 1200);
       return;
@@ -243,7 +236,15 @@ export default function App() {
     const pos = positions.find((p) => p.id === id);
     if (!pos) return;
 
+    if (mode !== 'LIVE' && !pos.demo) {
+      showToast('Live holdings can only be closed in LIVE with wallet approval.');
+      return;
+    }
     if (mode === 'LIVE') {
+      if (pos.walletAddress !== wallet.publicKey?.toBase58()) {
+        showToast('Connect the wallet that owns this position.');
+        return;
+      }
       if (chain !== 'SOL' || (pos.chain && pos.chain !== 'SOL')) {
         showToast('Wallet-signed close is SOL-only. Switch chain to SOL or close in your wallet.');
         return;
@@ -313,7 +314,7 @@ export default function App() {
         tab={tab}
         onTab={setTab}
         chain={chain}
-        onChain={setChain}
+        onChain={(next) => { setChain(next); setMode('SHADOW'); setBuyToken(null); }}
         mode={mode}
         onMode={(m) => void handleMode(m)}
         clock={clock}
@@ -326,19 +327,19 @@ export default function App() {
         {tab === 'token' ? (
           <div className="token-layout">
             <div className="col-main">
-              <MetricCards
+              {mode === 'SHADOW' && <MetricCards
                 scanned={tokens.length}
                 pastSafety={tokens.filter((t) => t.safeOk).length}
                 blockedSafety={tokens.filter((t) => !t.safeOk).length}
                 pastConsensus={tokens.filter((t) => t.llm !== 'FAIL').length}
                 blockedConsensus={tokens.filter((t) => t.llm === 'FAIL').length}
                 awaiting={awaiting}
-                positions={positions.length}
+                positions={visiblePositions.length}
                 cap={20}
                 exposure={exposure}
                 escapeAlerts={escapeAlerts}
                 trapRate={100}
-              />
+              />}
               {mode === 'SHADOW' ? (
                 <ScreeningTable
                   tokens={tokens}
@@ -357,17 +358,17 @@ export default function App() {
                   mode={mode}
                 />
               )}
-              <DecisionLog logs={logs} />
+              <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
             <div className="col-side">
-              <PositionEscapeMonitor positions={positions} onClose={(id) => void handleClosePosition(id)} />
-              <GateFunnel
+              <PositionEscapeMonitor positions={visiblePositions} onClose={(id) => void handleClosePosition(id)} />
+              {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}
                 exposure={exposure}
-                positions={positions.length}
+                positions={visiblePositions.length}
                 cap={20}
-              />
+              />}
             </div>
           </div>
         ) : (
@@ -376,6 +377,7 @@ export default function App() {
       </main>
 
       <BuyModal
+        key={String(buyToken?.id) + mode + chain}
         token={buyToken}
         amount={buyAmount}
         mode={mode}

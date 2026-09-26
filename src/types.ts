@@ -31,6 +31,8 @@ export interface ScreenToken {
 export interface Position {
   id: string;
   symbol: string;
+  walletAddress?: string;
+  signature?: string;
   /** Token CA for LIVE close */
   address?: string;
   chain?: Chain;

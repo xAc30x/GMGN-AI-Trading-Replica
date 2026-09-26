@@ -44,6 +44,7 @@ export function WalletEval() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="mock-data-banner">Demo wallet analytics and illustrative calculator — no wallet history is fetched.</div>
       <div className="wallet-search">
         <input
           value={address}

@@ -34,6 +34,7 @@ export interface LiveBuyMeta {
   intentOnly?: boolean;
   walletSigned?: boolean;
   paper?: boolean;
+  walletAddress?: string;
 }
 
 const NATIVE_HINT: Record<string, string> = {
@@ -55,6 +56,8 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
   const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [solQuote, setSolQuote] = useState<SolQuoteResponse | null>(null);
+  const [quoteKey, setQuoteKey] = useState('');
+  const currentQuoteKey = JSON.stringify([chain, tokenAddress.trim(), Number(amt), slippageBps]);
   const [quoteErr, setQuoteErr] = useState<string | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -104,6 +107,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     let cancelled = false;
     const t = window.setTimeout(() => {
       setQuoting(true);
+      setQuoteKey('');
       setQuoteErr(null);
       const req = isSolLive
         ? fetchSolQuote({
@@ -113,6 +117,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
           }).then((q) => {
             if (!cancelled) {
               setSolQuote(q);
+              setQuoteKey(currentQuoteKey);
               setQuote(null);
             }
           })
@@ -124,6 +129,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
           }).then((q) => {
             if (!cancelled) {
               setQuote(q);
+              setQuoteKey(currentQuoteKey);
               setSolQuote(null);
             }
           });
@@ -145,7 +151,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [token, isArmed, isSolLive, chain, tokenAddress, amt, maxNative, slippageBps]);
+  }, [token, isArmed, isSolLive, chain, tokenAddress, amt, maxNative, slippageBps, currentQuoteKey]);
 
   useEffect(() => {
     if (!isSolLive) {
@@ -199,7 +205,8 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     nAmt > 0 &&
     nAmt <= maxNative;
 
-  const safetyOk = Boolean(mintSafety?.ok);
+  const safetyOk = Boolean(mintSafety?.ok && mintSafety.mint === ca);
+  const quoteCurrent = quoteKey === currentQuoteKey && !quoting;
   const canSolSign =
     isSolLive &&
     !isPaper &&
@@ -207,7 +214,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     caOk &&
     !submitting &&
     !safetyLoading &&
-    safetyOk &&
+    safetyOk && quoteCurrent && Boolean(solQuote?.ok) &&
     Boolean(wallet.publicKey) &&
     Boolean(wallet.signTransaction) &&
     slippageBps >= 1 &&
@@ -220,12 +227,12 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     caOk &&
     !submitting &&
     !safetyLoading &&
-    safetyOk &&
+    safetyOk && quoteCurrent && Boolean(solQuote?.ok) &&
     Boolean(wallet.publicKey) &&
     slippageBps >= 1 &&
     slippageBps <= maxSlip;
 
-  const canCopyIntent = isArmed && !isSolLive && caOk;
+  const canCopyIntent = isArmed && !isSolLive && caOk && quoteCurrent && Boolean(quote?.ok);
 
   const handleShadow = () => {
     onConfirm(token, Number(amt) || amount);
@@ -233,6 +240,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
 
   const handleSolLive = async () => {
     if (!canSolSign) return;
+    const signingWallet = wallet.publicKey?.toBase58();
     setSubmitting(true);
     setStatusMsg('Building Jupiter swap — approve in your wallet…');
     try {
@@ -241,7 +249,6 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         outputMint: tokenAddress.trim(),
         amountSol: Number(amt) || amount,
         slippageBps,
-        quote: solQuote?.quote,
       });
       setStatusMsg(`Confirmed: ${result.signature.slice(0, 12)}…`);
       onConfirm(token, Number(amt) || amount, {
@@ -250,6 +257,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         tokenAddress: tokenAddress.trim(),
         live: true,
         walletSigned: true,
+        walletAddress: signingWallet,
       });
     } catch (e) {
       setStatusMsg(null);
@@ -269,7 +277,6 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         outputMint: tokenAddress.trim(),
         amountSol: Number(amt) || amount,
         slippageBps,
-        quote: solQuote?.quote,
       });
       if (!sim.ok) {
         setQuoteErr(sim.err || 'Simulation failed');
@@ -333,7 +340,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         </div>
 
         <div className="field">
-          <label htmlFor="buy-amt">Buy amount (computed by fixed-fraction; adjustable)</label>
+          <label htmlFor="buy-amt">Buy amount</label>
           <div className="inline-input">
             <input
               id="buy-amt"
@@ -404,7 +411,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
               onChange={(e) => setSlippageBps(Number(e.target.value) || DEFAULT_SLIPPAGE_BPS)}
               disabled={submitting}
             />
-            <div className="help">100 bps = 1%. The Jupiter quote min-out uses this ceiling.</div>
+            <div className="help">100 bps = 1%. The Jupiter quote min-out uses this ceiling. A fresh quote is built before wallet approval; review the final wallet transaction.</div>
           </div>
         )}
 
@@ -412,7 +419,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
           <div className="quote-box">
             {quoting && <div>Fetching quote…</div>}
             {!quoting && quoteErr && <div className="cred-msg err">{quoteErr}</div>}
-            {!quoting && isSolLive && solQuote?.ok && (
+            {quoteCurrent && isSolLive && solQuote?.ok && (
               <div>
                 Est. out (raw): <code>{solQuote.outAmount ?? '—'}</code>
                 {solQuote.otherAmountThreshold != null && (
@@ -422,12 +429,12 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
                   </>
                 )}
                 {solQuote.priceImpactPct != null && (
-                  <> · impact {Number(solQuote.priceImpactPct).toFixed(4)}%</>
+                  <> · impact {(Number(solQuote.priceImpactPct) * 100).toFixed(4)}%</>
                 )}
                 {solQuote.slippageBps != null && <> · {solQuote.slippageBps} bps</>}
               </div>
             )}
-            {!quoting && !isSolLive && quote?.ok && (
+            {quoteCurrent && !isSolLive && quote?.ok && (
               <div>
                 Est. output (raw units): <code>{quote.outputAmount ?? '—'}</code>
                 {quote.minOutputAmount != null && (

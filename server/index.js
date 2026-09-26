@@ -4,6 +4,7 @@
  * path, so this process must never accept or use GMGN_PRIVATE_KEY.
  * Quotes still need GMGN_LIVE=1, X-GMGN-Token, spend cap, and CA denylist.
  */
+import { envNumber } from './config.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -28,7 +29,7 @@ import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, '.env');
-const PORT = Number(process.env.PORT || 8787);
+const PORT = envNumber('PORT', 8787, { min: 1, max: 65535, integer: true });
 const SOLANA_RPC_URL =
   process.env.SOLANA_RPC_URL ||
   process.env.VITE_SOLANA_RPC_URL ||
@@ -107,7 +108,6 @@ function loadBoxSecrets() {
 }
 
 function loadEnvFile() {
-  loadBoxSecrets();
   if (fs.existsSync(ENV_PATH)) {
     dotenv.config({ path: ENV_PATH, override: false });
   }
@@ -137,9 +137,7 @@ function stripPersistedPrivateKey() {
   console.log('Removed GMGN_PRIVATE_KEY from server/.env (server signing disabled).');
 }
 
-loadEnvFile();
-stripPersistedPrivateKey();
-ensureLocalToken();
+// Startup-only mutations are performed below, never on import.
 
 function liveEnabled() {
   return process.env.GMGN_LIVE === '1';
@@ -174,11 +172,7 @@ function ensureLocalToken() {
 }
 
 function getMaxNativeAmount() {
-  const raw = process.env.GMGN_MAX_NATIVE_AMOUNT;
-  if (raw == null || raw === '') return DEFAULT_MAX_NATIVE_AMOUNT;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_NATIVE_AMOUNT;
-  return n;
+  return envNumber('GMGN_MAX_NATIVE_AMOUNT', DEFAULT_MAX_NATIVE_AMOUNT, { min: 0.000000001 });
 }
 
 function isBlockedOutputToken(token) {
@@ -509,7 +503,7 @@ function writeEnvMerge(updates, { allowKeys = CRED_ENV_KEYS } = {}) {
   }
 }
 
-const app = express();
+export const app = express();
 app.use(
   cors({
     origin: [VITE_ORIGIN, 'http://localhost:5173'],
@@ -830,14 +824,13 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     const safety = await assessMint(outputMint);
     assertMintSafe(safety);
 
-    const quote = body.quote && body.quote.outAmount
-      ? body.quote
-      : await jupiterQuote({
-          inputMint: SOL_MINT,
-          outputMint,
-          amountAtomic: lamports,
-          slippageBps,
-        });
+    // Never use a caller's quote: only the exact validated intent reaches Jupiter.
+    const quote = await jupiterQuote({
+      inputMint: SOL_MINT,
+      outputMint,
+      amountAtomic: lamports,
+      slippageBps,
+    });
     assertPriceImpactOk(quote);
     if (quote.inAmount && BigInt(quote.inAmount) > maxSmallest('sol')) {
       return res.status(400).json({ ok: false, error: 'Quote exceeds GMGN_MAX_NATIVE_AMOUNT' });
@@ -1007,14 +1000,21 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
   }
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
-  console.log(`CORS origin: ${VITE_ORIGIN}`);
-  console.log(
-    `LIVE=${liveEnabled() ? 'on' : 'off'} maxNative=${getMaxNativeAmount()} token=${getLocalToken() ? 'set' : 'missing'}`,
-  );
-  const c = credStatus();
-  console.log(
-    `Credentials: apiKey=${c.apiKey} wallet=${c.wallet} (${c.walletAddressMasked || 'none'}) serverSigning=disabled`,
-  );
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  loadBoxSecrets();
+  loadEnvFile();
+  stripPersistedPrivateKey();
+  ensureLocalToken();
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
+    console.log(`CORS origin: ${VITE_ORIGIN}`);
+    console.log(
+      `LIVE=${liveEnabled() ? 'on' : 'off'} maxNative=${getMaxNativeAmount()} token=${getLocalToken() ? 'set' : 'missing'}`,
+    );
+    const c = credStatus();
+    console.log(
+      `Credentials: apiKey=${c.apiKey} wallet=${c.wallet} (${c.walletAddressMasked || 'none'}) serverSigning=disabled`,
+    );
+  });
+
+}

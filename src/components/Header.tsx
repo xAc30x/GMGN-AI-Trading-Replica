@@ -37,8 +37,7 @@ export function Header({
         <div>
           <h1>AI TRADER // Screen + One-Click Trade</h1>
           <p>
-            v0.0.1 · Deterministic rules cast wide · ML cuts hard · LLM only explains survivors ·
-            you press to trade
+            v0.0.1 · Safety watchlist + wallet-approved swaps · AI ranking is not implemented
           </p>
         </div>
       </div>
@@ -82,7 +81,7 @@ export function Header({
             ))}
           </select>
         </label>
-        <div className="chip">P50 LAT {latency}ms</div>
+        <div className="chip">DEMO LAT {latency}ms</div>
         {onOpenCredentials && (
           <button
             type="button"

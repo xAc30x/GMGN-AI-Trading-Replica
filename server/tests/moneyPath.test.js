@@ -41,11 +41,3 @@ describe('assertPriceImpactOk', () => {
     assert.throws(() => assertPriceImpactOk({ priceImpactPct: '12' }), /Price impact/);
   });
 });
-
-describe('demo CA denylist shape', () => {
-  it('CLEANCAT-length address is blocked by server set', async () => {
-    // Import blocked set via assess path — call assessMint format fail + blocked list through assertOutputToken equivalent
-    const demo = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
-    assert.equal(demo.length, 44);
-  });
-});

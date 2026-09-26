@@ -5,6 +5,7 @@ import {
 } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
+import { confirmSwap } from './confirmSwap.ts';
 import { SOLANA_RPC } from './constants';
 
 async function signSendBase64(
@@ -17,21 +18,26 @@ async function signSendBase64(
   }
   const raw = Uint8Array.from(atob(swapTransaction), (c) => c.charCodeAt(0));
   const tx = VersionedTransaction.deserialize(raw);
+  if (!Number.isSafeInteger(lastValidBlockHeight) || !lastValidBlockHeight || lastValidBlockHeight < 1) {
+    throw new Error('Transaction expiry is missing or invalid');
+  }
+  if (tx.message.header.numRequiredSignatures !== 1 ||
+      !tx.message.staticAccountKeys[0]?.equals(wallet.publicKey)) {
+    throw new Error('Transaction signer does not match the connected wallet');
+  }
+  const originalMessage = tx.message.serialize();
   const signed = await wallet.signTransaction(tx);
+  const signedMessage = signed.message.serialize();
+  if (signedMessage.length !== originalMessage.length ||
+      !signedMessage.every((v, i) => v === originalMessage[i])) {
+    throw new Error('Wallet returned a modified transaction');
+  }
   const connection = new Connection(SOLANA_RPC, 'confirmed');
   const signature = await connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     maxRetries: 3,
   });
-  const latest = await connection.getLatestBlockhash('confirmed');
-  await connection.confirmTransaction(
-    {
-      signature,
-      blockhash: latest.blockhash,
-      lastValidBlockHeight: lastValidBlockHeight || latest.lastValidBlockHeight,
-    },
-    'confirmed',
-  );
+  await confirmSwap(connection, signature, tx.message.recentBlockhash, lastValidBlockHeight!);
   return {
     signature,
     explorerUrl: `https://solscan.io/tx/${signature}`,
@@ -45,14 +51,13 @@ export async function requireMintSafe(mint: string): Promise<void> {
   }
 }
 
-export async function signAndSendSolSwap(args: {
+async function executeSolSwap(args: {
   wallet: WalletContextState;
   outputMint: string;
   amountSol: number;
   slippageBps: number;
-  quote?: Record<string, unknown>;
 }): Promise<{ signature: string; explorerUrl: string }> {
-  const { wallet, outputMint, amountSol, slippageBps, quote } = args;
+  const { wallet, outputMint, amountSol, slippageBps } = args;
   await requireMintSafe(outputMint);
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error('Connect a Solana wallet that can sign transactions');
@@ -62,7 +67,6 @@ export async function signAndSendSolSwap(args: {
     amount: amountSol,
     slippageBps,
     userPublicKey: wallet.publicKey.toBase58(),
-    quote,
     confirm: true,
     mode: 'LIVE',
   });
@@ -90,7 +94,7 @@ export async function getTokenBalanceAtomic(
   return { amountAtomic: String(total), decimals };
 }
 
-export async function signAndSendSolClose(args: {
+async function executeSolClose(args: {
   wallet: WalletContextState;
   inputMint: string;
   percent?: number;
@@ -121,7 +125,6 @@ export async function paperSimulateSolSwap(args: {
   outputMint: string;
   amountSol: number;
   slippageBps: number;
-  quote?: Record<string, unknown>;
 }): Promise<{
   ok: boolean;
   unitsConsumed?: number;
@@ -131,14 +134,13 @@ export async function paperSimulateSolSwap(args: {
   outAmount?: string;
   otherAmountThreshold?: string;
 }> {
-  const { userPublicKey, outputMint, amountSol, slippageBps, quote } = args;
+  const { userPublicKey, outputMint, amountSol, slippageBps } = args;
   await requireMintSafe(outputMint);
   const built = await fetchSolSwapTx({
     outputMint,
     amount: amountSol,
     slippageBps,
     userPublicKey,
-    quote,
     confirm: true,
     mode: 'LIVE',
   });
@@ -168,4 +170,18 @@ export async function paperSimulateSolSwap(args: {
     outAmount: built.outAmount,
     otherAmountThreshold: built.otherAmountThreshold,
   };
+}
+
+let walletActionBusy = false;
+async function withWalletAction<T>(action: () => Promise<T>): Promise<T> {
+  if (walletActionBusy) throw new Error('A wallet transaction is already awaiting approval or confirmation');
+  walletActionBusy = true;
+  try { return await action(); }
+  finally { walletActionBusy = false; }
+}
+export function signAndSendSolSwap(args: Parameters<typeof executeSolSwap>[0]) {
+  return withWalletAction(() => executeSolSwap(args));
+}
+export function signAndSendSolClose(args: Parameters<typeof executeSolClose>[0]) {
+  return withWalletAction(() => executeSolClose(args));
 }

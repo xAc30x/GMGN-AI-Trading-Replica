@@ -2,6 +2,7 @@
  * Basic on-chain mint safety checks for Solana SPL tokens.
  * On-chain authority checks + RugCheck/GoPlus rug scan.
  */
+import './config.js';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { scanRug } from './rugScanner.js';
 

@@ -2,12 +2,14 @@
  * Full-ish rug / honeypot scan via RugCheck + GoPlus (public endpoints).
  * Merges into mint-safety: danger findings become blockers.
  */
+import { envNumber } from './config.js';
+
 const RUGCHECK_BASE = process.env.RUGCHECK_API_BASE || 'https://api.rugcheck.xyz/v1';
 const GOPLUS_BASE = process.env.GOPLUS_API_BASE || 'https://api.gopluslabs.io/api/v1';
 /** RugCheck score_normalised above this blocks (higher = riskier). */
-export const MAX_RUG_SCORE = Number(process.env.GMGN_MAX_RUG_SCORE || 40);
+export const MAX_RUG_SCORE = envNumber('GMGN_MAX_RUG_SCORE', 40, { min: 0, max: 100 });
 /** Min USD market liquidity from RugCheck (0 disables). */
-export const MIN_LIQUIDITY_USD = Number(process.env.GMGN_MIN_LIQUIDITY_USD || 1000);
+export const MIN_LIQUIDITY_USD = envNumber('GMGN_MIN_LIQUIDITY_USD', 1000, { min: 0 });
 
 const AUTHORITY_ALLOWLIST = new Set([
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
@@ -16,6 +18,7 @@ const AUTHORITY_ALLOWLIST = new Set([
 ]);
 
 const DANGER_LEVELS = new Set(['danger', 'critical', 'severe', 'error']);
+const RISK_LEVELS = new Set([...DANGER_LEVELS, 'warn', 'warning', 'info']);
 
 async function fetchJson(url, timeoutMs = 12_000) {
   const ctrl = new AbortController();
@@ -30,7 +33,7 @@ async function fetchJson(url, timeoutMs = 12_000) {
     try {
       data = text ? JSON.parse(text) : {};
     } catch {
-      data = { error: text.slice(0, 300) };
+      throw new Error('Invalid scanner JSON');
     }
     if (!res.ok) {
       const err = new Error(data.error || data.message || `HTTP ${res.status}`);
@@ -43,9 +46,36 @@ async function fetchJson(url, timeoutMs = 12_000) {
   }
 }
 
-function statusOn(field) {
-  if (!field || typeof field !== 'object') return false;
-  return String(field.status) === '1' || field.status === 1 || field.status === true;
+function flagValue(field) {
+  const v = field && typeof field === 'object' ? field.status : field;
+  if (v === true || v === 1 || v === '1') return true;
+  if (v === false || v === 0 || v === '0') return false;
+  throw new Error('Missing or invalid GoPlus status');
+}
+function statusOn(field) { return flagValue(field); }
+
+const finiteNumber = (n) => typeof n === 'number' && Number.isFinite(n);
+export function validateRugReport(data, mint) {
+  if (!data || data.error || data.mint !== mint || typeof data.rugged !== 'boolean' ||
+      !finiteNumber(data.score_normalised) || data.score_normalised < 0 || data.score_normalised > 100 ||
+      !Array.isArray(data.risks) || !data.risks.every(r =>
+        r && typeof r.name === 'string' && typeof r.level === 'string' &&
+        RISK_LEVELS.has(r.level.trim().toLowerCase())) ||
+      !Array.isArray(data.topHolders) || !data.topHolders.every(h =>
+        h && finiteNumber(h.pct) && h.pct >= 0 && h.pct <= 100)) {
+    throw new Error('Invalid or wrong-mint RugCheck report');
+  }
+  return data;
+}
+export function validateGoReport(data, mint) {
+  const entry = data?.result?.[mint];
+  if (data?.code !== 1 || !entry || typeof entry !== 'object') {
+    throw new Error('Missing or wrong-mint GoPlus report');
+  }
+  for (const key of ['non_transferable', 'closable', 'transfer_hook', 'freezable', 'mintable']) {
+    flagValue(entry[key]);
+  }
+  return data;
 }
 
 /**
@@ -71,10 +101,10 @@ export async function scanRug(mintAddress) {
   let go = null;
 
   const [rugRes, goRes] = await Promise.allSettled([
-    fetchJson(`${RUGCHECK_BASE}/tokens/${encodeURIComponent(mint)}/report`),
+    fetchJson(`${RUGCHECK_BASE}/tokens/${encodeURIComponent(mint)}/report`).then(data => validateRugReport(data, mint)),
     fetchJson(
       `${GOPLUS_BASE}/solana/token_security?contract_addresses=${encodeURIComponent(mint)}`,
-    ),
+    ).then(data => validateGoReport(data, mint)),
   ]);
 
   if (rugRes.status === 'fulfilled') {
@@ -117,6 +147,14 @@ export async function scanRug(mintAddress) {
     };
   }
 
+  if (MIN_LIQUIDITY_USD > 0 && !allowlisted) {
+    const liq = rug?.totalMarketLiquidity;
+    const ok = finiteNumber(liq) && liq >= MIN_LIQUIDITY_USD;
+    const detail = ok ? 'Liquidity $' + liq : 'Liquidity missing or under $' + MIN_LIQUIDITY_USD;
+    checks.push({ id: 'liquidity', ok, detail, level: ok ? 'info' : 'danger' });
+    if (!ok) blockers.push(detail);
+  }
+
   if (rug) {
     if (rug.rugged === true) {
       checks.push({ id: 'rugged', ok: false, detail: 'RugCheck marked this mint as rugged', level: 'danger' });
@@ -137,37 +175,8 @@ export async function scanRug(mintAddress) {
       if (!ok) blockers.push(`RugCheck score ${scoreN} exceeds max ${MAX_RUG_SCORE}`);
     }
 
-    const liq = Number(rug.totalMarketLiquidity);
-    if (Number.isFinite(liq) && MIN_LIQUIDITY_USD > 0 && !allowlisted) {
-      // RugCheck sometimes reports 0 for stables; only enforce when >0 reported or markets exist
-      const hasMarkets = Array.isArray(rug.markets) && rug.markets.length > 0;
-      if (hasMarkets && liq > 0 && liq < MIN_LIQUIDITY_USD) {
-        checks.push({
-          id: 'liquidity',
-          ok: false,
-          detail: `Liquidity $${liq.toFixed(0)} below $${MIN_LIQUIDITY_USD}`,
-          level: 'danger',
-        });
-        blockers.push(`Market liquidity under $${MIN_LIQUIDITY_USD}`);
-      } else if (hasMarkets && liq >= MIN_LIQUIDITY_USD) {
-        checks.push({
-          id: 'liquidity',
-          ok: true,
-          detail: `Liquidity ~$${liq.toFixed(0)}`,
-          level: 'info',
-        });
-      } else {
-        checks.push({
-          id: 'liquidity',
-          ok: true,
-          detail: hasMarkets ? `Liquidity reported $${liq}` : 'No liquidity figure from RugCheck',
-          level: 'warn',
-        });
-      }
-    }
-
     for (const risk of rug.risks || []) {
-      const level = String(risk.level || '').toLowerCase();
+      const level = String(risk.level || '').trim().toLowerCase();
       const name = risk.name || 'risk';
       const desc = risk.description || name;
       if (DANGER_LEVELS.has(level)) {
@@ -184,12 +193,9 @@ export async function scanRug(mintAddress) {
     // Top holder concentration
     const top = Array.isArray(rug.topHolders) ? rug.topHolders : [];
     if (top.length && !allowlisted) {
-      const pct = Number(top[0].pct ?? top[0].percentage ?? top[0].uiAmount);
-      // pct may already be 0-100
-      let topPct = Number(top[0].pct);
-      if (!Number.isFinite(topPct) && top[0].percentage != null) topPct = Number(top[0].percentage);
+      // RugCheck pct is already percentage points, never a fraction.
+      const topPct = Math.max(...top.map(h => h.pct));
       if (Number.isFinite(topPct)) {
-        if (topPct <= 1) topPct *= 100; // fraction
         const ok = topPct < 40;
         checks.push({
           id: 'topHolder',
@@ -203,10 +209,7 @@ export async function scanRug(mintAddress) {
   }
 
   if (go && go.result) {
-    const entry =
-      go.result[mint] ||
-      go.result[mint.toLowerCase()] ||
-      Object.values(go.result)[0];
+    const entry = go.result[mint];
     if (entry) {
       const dangerousFlags = [
         ['non_transferable', 'Token is non-transferable'],
@@ -270,6 +273,6 @@ export async function scanRug(mintAddress) {
           risks: rug.risks,
         }
       : null,
-    goplus: go?.result ? go.result[mint] || Object.values(go.result)[0] : null,
+    goplus: go?.result?.[mint] || null,
   };
 }

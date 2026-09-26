@@ -9,7 +9,7 @@ export function PositionEscapeMonitor({ positions, onClose }: Props) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Position Escape Monitor</h2>
+        <h2>Tracked holdings</h2>
       </div>
       <div className="pos-list">
         {positions.length === 0 && (
@@ -22,8 +22,7 @@ export function PositionEscapeMonitor({ positions, onClose }: Props) {
               {p.demo ? ' · demo' : p.chain ? ` · ${p.chain}` : ''}
             </span>
             <span className={`pnl ${p.pnlPct >= 0 ? 'pos' : 'neg'}`}>
-              {p.pnlPct >= 0 ? '+' : ''}
-              {p.pnlPct.toFixed(1)}%
+              {p.demo ? (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(1) + '%' : 'PnL unavailable'}
             </span>
             <button type="button" className="close-btn" onClick={() => onClose(p.id)}>
               Close

@@ -14,7 +14,7 @@ export function CopyTradeBacktest({ data }: Props) {
     const drift = latency * 1.8;
     const slipCost = slippage * 2;
     const gasDrag = gas * 4;
-    const copierPct = Math.max(0, data.walletPerTradePct - drift - slipCost - gasDrag * 0.1);
+    const copierPct = data.walletPerTradePct - drift - slipCost - gasDrag * 0.1;
     const ratio = copierPct / data.walletPerTradePct;
     const copierUsd = data.wallet7dUsd * ratio;
     const trap = data.wallet7dUsd - copierUsd;
@@ -24,7 +24,7 @@ export function CopyTradeBacktest({ data }: Props) {
   return (
     <section className="panel backtest">
       <div className="panel-head">
-        <h2>COPY-TRADE BACKTEST</h2>
+        <h2>ILLUSTRATIVE COPY-TRADE CALCULATOR</h2>
       </div>
       <p className="formula">copy/trade = wallet% − latency drift − 2× slippage − gas</p>
 
@@ -76,7 +76,7 @@ export function CopyTradeBacktest({ data }: Props) {
 
         <div>
           <div className="compare">
-            Per-trade net Wallet +{data.walletPerTradePct.toFixed(1)}% Copier +
+            Per-trade net Wallet +{data.walletPerTradePct.toFixed(1)}% Copier {result.copierPct >= 0 ? '+' : ''}
             {result.copierPct.toFixed(1)}%
           </div>
 
@@ -92,11 +92,11 @@ export function CopyTradeBacktest({ data }: Props) {
 
           <div className="bt-bar-row">
             <div className="lab">
-              <span>Copier actual 7D</span>
-              <strong>+${(result.copierUsd / 1000).toFixed(1)}K</strong>
+              <span>Copier estimate · mock inputs</span>
+              <strong>{result.copierUsd >= 0 ? '+' : '-'}${(Math.abs(result.copierUsd) / 1000).toFixed(1)}K</strong>
             </div>
             <div className="bt-bar">
-              <span style={{ width: `${Math.max(4, result.ratio * 100)}%` }} />
+              <span style={{ width: `${Math.max(0, result.ratio * 100)}%` }} />
             </div>
           </div>
 

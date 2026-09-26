@@ -52,7 +52,7 @@ Before a LIVE buy/close can sign, `/api/sol/mint-safety` runs:
 3. **GoPlus** — non-transferable, closable, transfer hook, freezable
 4. Jupiter price impact above `GMGN_MAX_PRICE_IMPACT_PCT` (default 5%) on quote/swap/close
 
-If both RugCheck and GoPlus are unreachable, LIVE fails closed (except allowlisted stables).
+If both providers are unavailable or return invalid data, LIVE fails closed (except existing allowlisted mints). With a nonzero liquidity floor, a valid RugCheck liquidity figure meeting that floor is required for nonallowlisted mints, including when GoPlus is available.
 
 ## SOL endpoints
 
@@ -66,7 +66,7 @@ If both RugCheck and GoPlus are unreachable, LIVE fails closed (except allowlist
 
 ## Still not “fully safe”
 
-Wallet signing removes hot-key custody from this app. You can still lose money to bad mints, thin liquidity, MEV, RPC issues, or approving the wrong wallet prompt. Start with a throwaway wallet and a tiny cap. Real token safety screening is not built yet.
+Wallet signing removes hot-key custody from this app. You can still lose money to bad mints, thin liquidity, MEV, RPC issues, or approving the wrong wallet prompt. Start with a throwaway wallet and a tiny cap. Safety screening is implemented, but it is not a guarantee of token safety or profitable execution.
 
 ## Stack
 
@@ -88,3 +88,36 @@ Wallet signing removes hot-key custody from this app. You can still lose money t
    ```bash
    npm test
    ```
+
+
+## Audit defect fixes
+
+Requires Node 22.12+. Client regression tests use the project's TypeScript compiler.
+Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm run lint.
+
+- Transaction builds obtain a fresh server-owned ExactIn quote. Caller quotes are ignored.
+  Mints, exact input amount, slippage, minimum output and price impact are validated.
+  Preview prices can change; review the final transaction in your wallet.
+- Jupiter impact is a fraction (0.01 = 1%). Missing/invalid values block the route.
+- Scanner payloads must match the exact mint and expected schema. Zero/unknown
+  liquidity cannot satisfy an enabled liquidity floor. RugCheck holder percentages
+  are percentage points, without guessing units.
+- server/.env loads before provider limits/RPC constants. Invalid numeric limits fail.
+  Put browser RPC configuration in Vite's environment; it is separate from server configuration.
+- Confirmation checks the execution error and uses the submitted blockhash.
+  Unknown confirmation errors include the signature: inspect it before retrying.
+- Live records are stored in this browser and separated by wallet + chain + mint.
+  They are tracked holdings, not reconciled accounting or exact purchase lots.
+  Close still explicitly sells the connected wallet's entire mint balance.
+  Switching wallets cannot close another wallet's tracked record. PAPER/SHADOW cannot erase live records.
+- LIVE/PAPER hide mock metrics. Wallet analysis and the copy calculator are labeled illustrative.
+
+Tests use mocked providers and local ephemeral HTTP listeners; they never sign or send trades.
+Importing the Express app does not start a server or generate/remove credentials.
+
+Remaining boundaries: Jupiter and the selected RPC are trusted providers; transaction instructions
+are not independently decoded as a full swap policy. Wallet approval remains mandatory.
+Local browser storage is not a durable shared execution ledger. In-tab signing is serialized,
+but cross-tab idempotency, recovery/reconciliation, portfolio limits, strategy validation,
+and automated exits remain separate work. Close safety gates and the close-size bound remain
+in force; this patch does not bypass them to sell unsafe tokens.

@@ -8,7 +8,7 @@ export function DecisionLog({ logs }: Props) {
   return (
     <section className="panel log-panel">
       <div className="panel-head">
-        <h2>📈 Live Decision Log · trade_decisions.jsonl</h2>
+        <h2>📈 Session activity · not a persistent audit log</h2>
       </div>
       <div className="log-list">
         {[...logs].reverse().map((l) => (

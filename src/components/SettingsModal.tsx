@@ -52,8 +52,7 @@ export function SettingsModal({ open, command, interval, onClose, onSave }: Prop
             spellCheck={false}
           />
           <div className="help">
-            Full command run each scan; must start with gmgn-cli market trending. --raw auto-added.
-            Tune --limit / --interval / --order-by / --filter / --chain.
+            Reference command only. This screen does not execute commands or fetch trending data.
           </div>
         </div>
 
@@ -71,15 +70,12 @@ export function SettingsModal({ open, command, interval, onClose, onSave }: Prop
             <span style={{ color: 'var(--text-dim)' }}>s</span>
           </div>
           <div className="help">
-            How often the frontend calls /api/run. ≥30s recommended to save quota; shorter for first
-            feel.
+            Demo setting only. The live watchlist refreshes when opened or when you select Rescan.
           </div>
         </div>
 
         <div className="warn-box">
-          ⚠ The command runs on your local backend (127.0.0.1), trending commands only. Takes effect
-          on save: command from the next round, interval reset instantly. This demo has no backend —
-          save triggers a mock scan animation only.
+          Saving starts a mock scan animation. The backend supports quotes and safety checks, but no trending command or polling endpoint.
         </div>
 
         <div className="modal-actions">
@@ -101,7 +97,7 @@ export function SettingsModal({ open, command, interval, onClose, onSave }: Prop
             Close
           </button>
           <span className="modal-status">
-            Backend not connected; command available only with the local backend
+            Trending execution is not implemented
           </span>
         </div>
       </div>

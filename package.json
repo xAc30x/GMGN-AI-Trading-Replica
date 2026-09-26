@@ -40,5 +40,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vite-plugin-node-polyfills": "^0.28.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

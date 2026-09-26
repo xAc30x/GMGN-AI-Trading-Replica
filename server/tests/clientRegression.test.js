@@ -14,20 +14,23 @@ async function loadTs(path) {
 const { confirmSwap } = await loadTs('../../src/solana/confirmSwap.ts');
 const { recordLivePosition, loadLivePositions, saveLivePositions } = await loadTs('../../src/positions.ts');
 
-test('confirmation uses submitted blockhash and propagates execution errors', async () => {
-  const seen = [];
-  const connection = { confirmTransaction: async strategy => {
-    seen.push(strategy); return { value:{ err:{ InstructionError:[0,'failed'] } } };
-  }};
-  await assert.rejects(confirmSwap(connection, 'signature', 'submitted-blockhash', 123), /Transaction failed/);
-  assert.deepEqual(seen[0], { signature:'signature', blockhash:'submitted-blockhash', lastValidBlockHeight:123 });
+const fast = { intervalMs: 1, timeoutMs: 200 };
+const conn = (statuses, height = 0) => { let i = 0; return {
+  getSignatureStatuses: async () => ({ value: [statuses[Math.min(i++, statuses.length - 1)]] }),
+  getBlockHeight: async () => height,
+}; };
+test('confirmation propagates execution errors', async () => {
+  await assert.rejects(confirmSwap(conn([{ err:{ InstructionError:[0,'failed'] } }]), 'signature', 'h', 123, fast), /Transaction failed/);
 });
-test('confirmed successful transactions remain successful', async () => {
-  await confirmSwap({ confirmTransaction:async () => ({ value:{ err:null } }) }, 'sig', 'hash', 123);
+test('confirmed successful transactions remain successful after polling', async () => {
+  await confirmSwap(conn([null, { err:null, confirmationStatus:'processed' }, { err:null, confirmationStatus:'confirmed' }]), 'sig', 'hash', 123, fast);
 });
-test('unknown confirmation preserves the signature in the error', async () => {
-  await assert.rejects(confirmSwap({ confirmTransaction:async () => { throw Error('timeout'); } },
-    'recover-this-signature','hash',123), /recover-this-signature.*before retrying/);
+test('expired blockhash with no status preserves the signature in the error', async () => {
+  await assert.rejects(confirmSwap(conn([null], 999), 'recover-this-signature','hash',123, fast), /recover-this-signature.*before retrying/);
+});
+test('timeout preserves the signature in the error', async () => {
+  const c = { getSignatureStatuses: async () => { throw Error('net'); }, getBlockHeight: async () => 0 };
+  await assert.rejects(confirmSwap(c, 'recover-this-signature','hash',123, fast), /recover-this-signature.*before retrying/);
 });
 const pos = { id:'p', symbol:'SAME', chain:'SOL', address:'mintA', walletAddress:'walletA',
   signature:'sig', demo:false, sizeSol:0.01, pnlPct:0, entryAge:'0m' };

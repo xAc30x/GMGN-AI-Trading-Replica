@@ -723,6 +723,39 @@ app.post(
 
 
 /** Solana Jupiter: quote (unsigned). Requires local token + GMGN_LIVE=1. */
+// Browser JSON-RPC proxy: the public Solana RPC returns 403 to browser-origin requests.
+const RPC_PROXY_METHODS = new Set([
+  'getLatestBlockhash', 'isBlockhashValid', 'getBlockHeight', 'getSlot', 'getEpochInfo',
+  'getVersion', 'getGenesisHash', 'getHealth', 'simulateTransaction', 'sendTransaction',
+  'getSignatureStatuses', 'getBalance', 'getAccountInfo', 'getMultipleAccounts',
+  'getTokenAccountsByOwner', 'getTokenAccountBalance', 'getFeeForMessage',
+  'getRecentPrioritizationFees', 'getMinimumBalanceForRentExemption',
+]);
+export function rpcProxyRejects(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Single JSON-RPC request required';
+  if (body.jsonrpc !== '2.0' || typeof body.method !== 'string') return 'Invalid JSON-RPC request';
+  if (!RPC_PROXY_METHODS.has(body.method)) return `RPC method not allowed: ${body.method}`;
+  return null;
+}
+app.post('/api/sol/rpc', requireLocalToken, async (req, res) => {
+  const reject = rpcProxyRejects(req.body);
+  if (reject) {
+    return res.status(400).json({ jsonrpc: '2.0', id: req.body?.id ?? null, error: { code: -32601, message: reject } });
+  }
+  try {
+    const upstream = await fetch(SOLANA_RPC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: req.body.id ?? 1, method: req.body.method, params: req.body.params ?? [] }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const text = await upstream.text();
+    res.status(upstream.status).type('application/json').send(text);
+  } catch (e) {
+    res.status(502).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32000, message: `RPC upstream failed: ${e instanceof Error ? e.message : String(e)}` } });
+  }
+});
+
 app.post('/api/sol/quote', requireLocalToken, requireLiveFlag, async (req, res) => {
   try {
     const body = req.body || {};

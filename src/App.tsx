@@ -120,8 +120,8 @@ export default function App() {
           showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
           return;
         }
-        if (h.rpcIsPublic || isPublicSolanaRpc()) {
-          showToast('Using public Solana RPC — set VITE_SOLANA_RPC_URL for reliability');
+        if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
+          showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
         }
       } catch {
         showToast('Server not reachable — start npm run server');

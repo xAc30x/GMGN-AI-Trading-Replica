@@ -1,12 +1,11 @@
 import {
-  Connection,
   PublicKey,
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
 import { confirmSwap } from './confirmSwap.ts';
-import { SOLANA_RPC } from './constants';
+import { makeConnection } from './constants';
 
 async function signSendBase64(
   wallet: WalletContextState,
@@ -32,7 +31,7 @@ async function signSendBase64(
       !signedMessage.every((v, i) => v === originalMessage[i])) {
     throw new Error('Wallet returned a modified transaction');
   }
-  const connection = new Connection(SOLANA_RPC, 'confirmed');
+  const connection = makeConnection();
   const signature = await connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     maxRetries: 3,
@@ -77,7 +76,7 @@ export async function getTokenBalanceAtomic(
   owner: PublicKey,
   mint: string,
 ): Promise<{ amountAtomic: string; decimals: number }> {
-  const connection = new Connection(SOLANA_RPC, 'confirmed');
+  const connection = makeConnection();
   const mintPk = new PublicKey(mint);
   const accounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: mintPk });
   let total = 0n;
@@ -146,7 +145,7 @@ export async function paperSimulateSolSwap(args: {
   });
   const raw = Uint8Array.from(atob(built.swapTransaction), (c) => c.charCodeAt(0));
   const tx = VersionedTransaction.deserialize(raw);
-  const connection = new Connection(SOLANA_RPC, 'confirmed');
+  const connection = makeConnection();
   const sim = await connection.simulateTransaction(tx, {
     sigVerify: false,
     replaceRecentBlockhash: true,

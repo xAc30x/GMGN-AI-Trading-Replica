@@ -108,3 +108,12 @@ test('GoPlus transfer_hook list format is parsed (empty = none, non-empty = hook
   assert.doesNotThrow(() => validateGoReport({ code: 1, result: { [mint]: hooked } }, mint));
   assert.throws(() => validateGoReport({ code: 1, result: { [mint]: { ...clear, transfer_hook: 'junk' } } }, mint));
 });
+
+test('browser RPC proxy only forwards single allowlisted JSON-RPC calls', async () => {
+  const { rpcProxyRejects } = await import('../index.js');
+  assert.equal(rpcProxyRejects({ jsonrpc:'2.0', id:1, method:'simulateTransaction', params:[] }), null);
+  assert.equal(rpcProxyRejects({ jsonrpc:'2.0', id:1, method:'getSignatureStatuses', params:[] }), null);
+  assert.match(rpcProxyRejects({ jsonrpc:'2.0', id:1, method:'requestAirdrop' }), /not allowed/);
+  assert.match(rpcProxyRejects([{ jsonrpc:'2.0', id:1, method:'getSlot' }]), /Single/);
+  assert.match(rpcProxyRejects({ method:'getSlot' }), /Invalid/);
+});

@@ -89,22 +89,21 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
       >
         <div className="modal-head">
           <span style={{ color: 'var(--lime)' }}>🔑</span>
-          <h3 id="cred-title">Quote credentials</h3>
+          <h3 id="cred-title">Access token</h3>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
         <p className="cred-disclaimer">
-          This app <strong>does not</strong> accept or store <code>GMGN_PRIVATE_KEY</code>. Server-side
-          LIVE signing is disabled because gmgn-cli cannot hand unsigned txs to your wallet. Configure{' '}
-          <code>GMGN_API_KEY</code> and <code>GMGN_WALLET_ADDRESS</code> for quotes only. Prefer
-          exporting them in the shell that runs <code>npm run server</code>. Get an API key at{' '}
-          <a href="https://gmgn.ai/ai" target="_blank" rel="noreferrer">
-            gmgn.ai/ai
-          </a>
-          . Quotes still need <code>GMGN_LIVE=1</code>, a matching <code>GMGN_LOCAL_TOKEN</code>, and
-          stay capped at <code>GMGN_MAX_NATIVE_AMOUNT</code> (default 0.05 native).
+          <strong>For SOL PAPER/LIVE you only need the local access token.</strong> Run{' '}
+          <code>grep GMGN_LOCAL_TOKEN server/.env</code>, paste the value below, and click Save. Trades are
+          signed in your connected wallet (Phantom/Solflare); this server never holds a private key. Each buy
+          is capped at <code>GMGN_MAX_NATIVE_AMOUNT</code>.
+        </p>
+        <p className="help" style={{ marginBottom: 12 }}>
+          Wallet address and GMGN API key are optional and only used by the legacy GMGN quote path (non-SOL
+          chains). Leave them empty for SOL trading.
         </p>
 
         <div className="cred-status">
@@ -131,7 +130,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
             </strong>
           </div>
           <div>
-            quoteReady:{' '}
+            GMGN quotes (optional):{' '}
             <strong className={health?.liveReady ? 'pos' : 'neg'}>
               {health?.liveReady ? 'yes' : 'no'}
             </strong>
@@ -166,13 +165,13 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
             type="password"
             value={localToken}
             onChange={(e) => setLocalTokenField(e.target.value)}
-            placeholder="Required for quote / saving wallet or API key"
+            placeholder="Required for PAPER and LIVE"
             autoComplete="off"
           />
         </div>
 
         <div className="field">
-          <label htmlFor="cred-wallet">Wallet address (bound to API key)</label>
+          <label htmlFor="cred-wallet">Wallet address (optional, legacy GMGN quotes only)</label>
           <input
             id="cred-wallet"
             value={wallet}
@@ -185,7 +184,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
 
         {c?.apiKeySource === 'missing' && (
           <div className="field">
-            <label htmlFor="cred-api">API key (writes server/.env only)</label>
+            <label htmlFor="cred-api">GMGN API key (optional, legacy quotes only)</label>
             <input
               id="cred-api"
               type="password"
@@ -208,7 +207,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
 
         <div className="modal-actions">
           <button type="button" className="btn-primary" disabled={busy} onClick={() => void onSave()}>
-            {busy ? 'Saving…' : 'Save to server'}
+            {busy ? 'Saving…' : 'Save'}
           </button>
           <button type="button" className="btn-ghost" onClick={() => void refresh()}>
             Refresh status

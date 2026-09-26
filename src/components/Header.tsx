@@ -87,7 +87,7 @@ export function Header({
             type="button"
             className="chip cred-chip"
             onClick={onOpenCredentials}
-            title="Quote credentials / local token"
+            title="Access token (required for PAPER/LIVE)"
           >
             {liveReady ? '● QUOTE READY' : '○ CREDS'}
           </button>

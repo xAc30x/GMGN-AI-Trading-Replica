@@ -117,3 +117,12 @@ test('browser RPC proxy only forwards single allowlisted JSON-RPC calls', async 
   assert.match(rpcProxyRejects([{ jsonrpc:'2.0', id:1, method:'getSlot' }]), /Single/);
   assert.match(rpcProxyRejects({ method:'getSlot' }), /Invalid/);
 });
+
+test('GoPlus array compatibility is limited to transfer_hook', async () => {
+  const { validateGoReport } = await import('../rugScanner.js');
+  for (const key of ['non_transferable','closable','freezable','mintable']) {
+    for (const value of [[], [{}]]) {
+      assert.throws(() => validateGoReport({ code:1, result:{ [mint]:{ ...clear, [key]:value } } }, mint));
+    }
+  }
+});

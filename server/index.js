@@ -737,7 +737,11 @@ export function rpcProxyRejects(body) {
   if (!RPC_PROXY_METHODS.has(body.method)) return `RPC method not allowed: ${body.method}`;
   return null;
 }
-app.post('/api/sol/rpc', requireLocalToken, async (req, res) => {
+app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
+  // A signed transaction can arrive after LIVE was disabled, or outside the UI.
+  if (req.body?.method === 'sendTransaction') return requireLiveFlag(req, res, next);
+  next();
+}, async (req, res) => {
   const reject = rpcProxyRejects(req.body);
   if (reject) {
     return res.status(400).json({ jsonrpc: '2.0', id: req.body?.id ?? null, error: { code: -32601, message: reject } });
@@ -1032,6 +1036,11 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
     res.status(e.status || 500).json({ ok: false, error: e.message });
   }
 });
+
+// Production serves only the built frontend, never repository files or secrets.
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.resolve(__dirname, '../dist'), { dotfiles: 'deny' }));
+}
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   loadBoxSecrets();

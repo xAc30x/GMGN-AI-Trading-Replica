@@ -74,8 +74,10 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
   useEffect(() => {
     if (!token) return;
     setAmt(String(amount));
-    setTokenAddress('');
-    setCaConfirm('');
+    // Watchlist rows carry a real, user-added mint; prefill it so the retype step isn't a dead end.
+    const prefill = token.address && !isDemoTokenAddress(token.address) ? token.address.trim() : '';
+    setTokenAddress(prefill);
+    setCaConfirm(prefill);
     setUnderstand(false);
     setQuote(null);
     setSolQuote(null);
@@ -231,6 +233,22 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     Boolean(wallet.publicKey) &&
     slippageBps >= 1 &&
     slippageBps <= maxSlip;
+
+  const solBlockers: string[] = [];
+  if (isSolLive) {
+    if (!hasLocalToken()) solBlockers.push('Paste the access token in CREDS first');
+    if (ca.length < 32 || isDemoTokenAddress(ca)) solBlockers.push('Enter the real token address');
+    else if (caConfirm.trim() !== ca) solBlockers.push('Re-typed address does not match');
+    if (!Number.isFinite(nAmt) || nAmt <= 0 || nAmt > maxNative) solBlockers.push(`Amount must be above 0 and at most ${maxNative} SOL`);
+    if (slippageBps < 1 || slippageBps > maxSlip) solBlockers.push(`Slippage must be 1 to ${maxSlip} bps`);
+    if (!wallet.publicKey) solBlockers.push('Connect your wallet (button at top right)');
+    if (!isPaper && !wallet.signTransaction) solBlockers.push('Connected wallet cannot sign transactions');
+    if (safetyLoading) solBlockers.push('Running safety checks…');
+    else if (ca.length >= 32 && !safetyOk) solBlockers.push('Safety checks have not passed for this token');
+    if (quoting) solBlockers.push('Fetching quote…');
+    else if (ca.length >= 32 && (!quoteCurrent || !solQuote?.ok)) solBlockers.push('No valid quote yet');
+    if (!understand) solBlockers.push('Tick the confirmation checkbox');
+  }
 
   const canCopyIntent = isArmed && !isSolLive && caOk && quoteCurrent && Boolean(quote?.ok);
 
@@ -522,6 +540,17 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         )}
 
         {statusMsg && <div className="status-line">{statusMsg}</div>}
+
+        {isSolLive && !submitting && solBlockers.length > 0 && (
+          <div className="cred-msg err" role="status">
+            Button disabled until:
+            <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+              {solBlockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="modal-actions">
           {isSolLive && isPaper ? (

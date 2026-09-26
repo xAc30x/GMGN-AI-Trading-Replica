@@ -46,15 +46,18 @@ async function fetchJson(url, timeoutMs = 12_000) {
   }
 }
 
-function flagValue(field) {
+function flagValue(field, key) {
   // GoPlus reports transfer_hook as a list of hook programs: empty means none.
-  if (Array.isArray(field)) return field.length > 0;
+  if (Array.isArray(field)) {
+    if (key !== 'transfer_hook') throw new Error('Invalid GoPlus status array');
+    return field.length > 0;
+  }
   const v = field && typeof field === 'object' ? field.status : field;
   if (v === true || v === 1 || v === '1') return true;
   if (v === false || v === 0 || v === '0') return false;
   throw new Error('Missing or invalid GoPlus status');
 }
-function statusOn(field) { return flagValue(field); }
+function statusOn(field, key) { return flagValue(field, key); }
 
 const finiteNumber = (n) => typeof n === 'number' && Number.isFinite(n);
 export function validateRugReport(data, mint) {
@@ -75,7 +78,7 @@ export function validateGoReport(data, mint) {
     throw new Error('Missing or wrong-mint GoPlus report');
   }
   for (const key of ['non_transferable', 'closable', 'transfer_hook', 'freezable', 'mintable']) {
-    flagValue(entry[key]);
+    flagValue(entry[key], key);
   }
   return data;
 }
@@ -219,7 +222,7 @@ export async function scanRug(mintAddress) {
         ['transfer_hook', 'Transfer hook present (custom transfer logic)'],
       ];
       for (const [key, label] of dangerousFlags) {
-        if (statusOn(entry[key])) {
+        if (statusOn(entry[key], key)) {
           checks.push({ id: `goplus:${key}`, ok: false, detail: label, level: 'danger' });
           if (!allowlisted) blockers.push(label);
         } else if (entry[key]) {

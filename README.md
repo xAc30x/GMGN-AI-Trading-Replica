@@ -121,3 +121,11 @@ Local browser storage is not a durable shared execution ledger. In-tab signing i
 but cross-tab idempotency, recovery/reconciliation, portfolio limits, strategy validation,
 and automated exits remain separate work. Close safety gates and the close-size bound remain
 in force; this patch does not bypass them to sell unsafe tokens.
+
+### Private production deployment
+
+Build with `npm ci --ignore-scripts` and `npm run build`, then run
+`NODE_ENV=production GMGN_LIVE=0 npm run server`. The backend serves the built
+frontend and API together at http://127.0.0.1:8787. It binds only to loopback.
+Keep LIVE disabled until separately authorized and validated. Production serving
+does not expose the source tree; unknown API routes remain 404.

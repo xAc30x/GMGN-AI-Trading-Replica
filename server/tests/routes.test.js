@@ -86,3 +86,42 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   assert.equal(builtQuote.inputMint,mint);
   assert.equal(builtQuote.outputMint,sol);
 });
+
+test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation', async t => {
+  const oldLive = process.env.GMGN_LIVE;
+  const oldToken = process.env.GMGN_LOCAL_TOKEN;
+  process.env.GMGN_LIVE = '0';
+  process.env.GMGN_LOCAL_TOKEN = 'rpc-test-token';
+  t.after(() => {
+    if (oldLive === undefined) delete process.env.GMGN_LIVE; else process.env.GMGN_LIVE = oldLive;
+    if (oldToken === undefined) delete process.env.GMGN_LOCAL_TOKEN; else process.env.GMGN_LOCAL_TOKEN = oldToken;
+  });
+  const forwarded = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    forwarded.push(JSON.parse(init.body).method);
+    return Response.json({ jsonrpc:'2.0', id:7, result:'mock-only' });
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const request = (body, token='rpc-test-token') => new Promise((resolve, reject) => {
+    const req = http.request({ hostname:'127.0.0.1', port:server.address().port,
+      path:'/api/sol/rpc', method:'POST',
+      headers:{ 'content-type':'application/json', 'x-gmgn-token':token } }, res => {
+        res.resume(); res.on('end', () => resolve(res.statusCode));
+      });
+    req.on('error', reject); req.end(JSON.stringify(body));
+  });
+  const call = method => ({ jsonrpc:'2.0', id:7, method, params:[] });
+  assert.equal(await request(call('sendTransaction'), 'wrong'), 401);
+  assert.equal(await request(call('sendTransaction')), 403);
+  assert.deepEqual(forwarded, []);
+  assert.equal(await request([call('sendTransaction')]), 400);
+  assert.equal(await request(call('sendRawTransaction')), 400);
+  for (const method of ['getBalance', 'getSignatureStatuses', 'simulateTransaction']) {
+    assert.equal(await request(call(method)), 200);
+  }
+  process.env.GMGN_LIVE = '1';
+  assert.equal(await request(call('sendTransaction')), 200);
+  assert.deepEqual(forwarded, ['getBalance','getSignatureStatuses','simulateTransaction','sendTransaction']);
+});

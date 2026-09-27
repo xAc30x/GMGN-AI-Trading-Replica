@@ -56,6 +56,11 @@ test('valid low holder percentage is not multiplied by 100', async t => {
   const result = await scan(t, rug, go);
   assert.equal(result.ok, true);
 });
+test('empty top-holder data blocks even with valid scanner reports', async t => {
+  const result = await scan(t, { ...rug, topHolders: [] }, go);
+  assert.equal(result.ok, false);
+  assert.ok(result.blockers.some(blocker => blocker.includes('Top-holder data unavailable')));
+});
 test('empty HTTP200 scanner results fail closed', async t => {
   assert.equal((await scan(t, {}, {})).ok, false);
 });

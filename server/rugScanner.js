@@ -197,7 +197,15 @@ export async function scanRug(mintAddress) {
 
     // Top holder concentration
     const top = Array.isArray(rug.topHolders) ? rug.topHolders : [];
-    if (top.length && !allowlisted) {
+    if (!allowlisted && top.length === 0) {
+      checks.push({
+        id: 'topHolder',
+        ok: false,
+        detail: 'Top-holder data unavailable',
+        level: 'danger',
+      });
+      blockers.push('Top-holder data unavailable — refusing LIVE');
+    } else if (top.length && !allowlisted) {
       // RugCheck pct is already percentage points, never a fraction.
       const topPct = Math.max(...top.map(h => h.pct));
       if (Number.isFinite(topPct)) {

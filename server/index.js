@@ -26,6 +26,7 @@ import {
 } from './jupiterSol.js';
 import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
+import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, '.env');
@@ -87,6 +88,8 @@ const CRED_ENV_KEYS = new Set([
 ]);
 
 const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
+const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
+const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
 const TOKEN_HEADER = 'x-gmgn-token';
 
 /** Load GMGN_* from Grok Bot secret-request store (card) without logging values. */
@@ -141,6 +144,10 @@ function stripPersistedPrivateKey() {
 
 function liveEnabled() {
   return process.env.GMGN_LIVE === '1';
+}
+
+function solBroadcastEnabled() {
+  return process.env.GMGN_SOL_BROADCAST === '1';
 }
 
 function getLocalToken() {
@@ -247,6 +254,16 @@ function requireLiveFlag(req, res, next) {
     return res.status(403).json({
       ok: false,
       error: 'LIVE disabled on server. Export GMGN_LIVE=1 in the process that runs npm run server.',
+    });
+  }
+  next();
+}
+
+function requireSolBroadcast(req, res, next) {
+  if (!solBroadcastEnabled()) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Solana transaction broadcast disabled. Set GMGN_SOL_BROADCAST=1 to enable wallet-submitted transactions.',
     });
   }
   next();
@@ -524,8 +541,11 @@ app.get('/api/health', async (_req, res) => {
     cliInstalled: installed,
     liveEnabled: enabled,
     solLiveEnabled: enabled,
+    solBroadcastEnabled: solBroadcastEnabled(),
     tokenConfigured,
     maxNativeAmount: getMaxNativeAmount(),
+    maxPortfolioSol: MAX_PORTFOLIO_SOL,
+    maxOpenPositions: MAX_OPEN_POSITIONS,
     maxSlippageBps: MAX_SLIPPAGE_BPS,
     defaultSlippageBps: DEFAULT_SLIPPAGE_BPS,
     maxPriceImpactPct: MAX_PRICE_IMPACT_PCT,
@@ -738,13 +758,32 @@ export function rpcProxyRejects(body) {
   return null;
 }
 app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
-  // A signed transaction can arrive after LIVE was disabled, or outside the UI.
-  if (req.body?.method === 'sendTransaction') return requireLiveFlag(req, res, next);
+  // Broadcast needs a second opt-in beyond enabling quotes and simulations.
+  if (req.body?.method === 'sendTransaction') {
+    return requireLiveFlag(req, res, () => requireSolBroadcast(req, res, next));
+  }
   next();
 }, async (req, res) => {
   const reject = rpcProxyRejects(req.body);
   if (reject) {
     return res.status(400).json({ jsonrpc: '2.0', id: req.body?.id ?? null, error: { code: -32601, message: reject } });
+  }
+  let tradeId;
+  if (req.body.method === 'sendTransaction') {
+    tradeId = req.get('x-gmgn-trade-id');
+    const claim = claimBroadcast(tradeId, req.body.params?.[0]);
+    if (claim.kind === 'invalid') {
+      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: claim.error } });
+    }
+    if (claim.kind === 'cached') {
+      return res.json({ jsonrpc: '2.0', id: req.body.id ?? 1, result: claim.signature });
+    }
+    if (claim.kind !== 'claimed') {
+      const message = claim.kind === 'conflict'
+        ? 'Trade ID was already used for a different signed transaction'
+        : 'Trade ID is pending or has a prior uncertain result; reconcile before retrying';
+      return res.status(409).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32009, message } });
+    }
   }
   try {
     const upstream = await fetch(SOLANA_RPC_URL, {
@@ -754,6 +793,15 @@ app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
       signal: AbortSignal.timeout(20_000),
     });
     const text = await upstream.text();
+    if (tradeId) {
+      try {
+        const result = JSON.parse(text);
+        if (result.error) completeBroadcast(tradeId, { failed: true });
+        else if (upstream.ok && typeof result.result === 'string') {
+          completeBroadcast(tradeId, { signature: result.result });
+        }
+      } catch { /* retain pending state when the RPC response is ambiguous */ }
+    }
     res.status(upstream.status).type('application/json').send(text);
   } catch (e) {
     res.status(502).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32000, message: `RPC upstream failed: ${e instanceof Error ? e.message : String(e)}` } });
@@ -856,6 +904,22 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       lamports = assertSpendAmount('sol', String(body.amountLamports));
     } else {
       lamports = assertSpendAmount('sol', String(solToLamports(body.amount)));
+    }
+
+    const portfolio = body.portfolio || {};
+    const currentExposureSol = Number(portfolio.currentExposureSol);
+    const openPositions = Number(portfolio.openPositions);
+    if (!Number.isFinite(currentExposureSol) || currentExposureSol < 0 ||
+        !Number.isInteger(openPositions) || openPositions < 0 ||
+        typeof portfolio.isExistingMint !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'Current portfolio exposure and position count are required' });
+    }
+    const nextExposureSol = currentExposureSol + Number(lamports) / 1_000_000_000;
+    if (nextExposureSol > MAX_PORTFOLIO_SOL + 1e-9) {
+      return res.status(400).json({ ok: false, error: `Portfolio cap exceeded: ${MAX_PORTFOLIO_SOL} SOL` });
+    }
+    if (!portfolio.isExistingMint && openPositions >= MAX_OPEN_POSITIONS) {
+      return res.status(400).json({ ok: false, error: `Open-position cap reached: ${MAX_OPEN_POSITIONS}` });
     }
 
     const safety = await assessMint(outputMint);

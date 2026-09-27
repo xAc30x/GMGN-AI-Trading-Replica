@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { Connection } from '@solana/web3.js';
 import { app } from '../index.js';
 
@@ -58,7 +61,8 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
     });
     req.on('error',reject);req.end(JSON.stringify(body));
   });
-  const body={ outputMint:mint,amount:0.01,slippageBps:100,userPublicKey:sol,confirm:true,mode:'LIVE' };
+  const body={ outputMint:mint,amount:0.01,slippageBps:100,userPublicKey:sol,
+    portfolio:{ currentExposureSol:0,openPositions:0,isExistingMint:false },confirm:true,mode:'LIVE' };
   const route='/api/sol/swap-tx';
   assert.equal((await request(route,body,'wrong')).status,401);
   process.env.GMGN_LIVE='0';
@@ -68,6 +72,9 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   assert.equal((await request(route,{ ...body,amount:0.051 })).status,400);
   assert.equal((await request(route,{ ...body,slippageBps:301 })).status,400);
   assert.equal((await request(route,{ ...body,outputMint:'7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' })).status,400);
+  assert.equal((await request(route,{ ...body,portfolio:{ currentExposureSol:0.095,openPositions:0,isExistingMint:false } })).status,400);
+  assert.equal((await request(route,{ ...body,portfolio:{ currentExposureSol:0,openPositions:5,isExistingMint:false } })).status,400);
+  assert.equal((await request(route,{ ...body,portfolio:undefined })).status,400);
   const attackerQuote={ outputMint:sol,inputMint:'wrong',outAmount:'99999',inAmount:'50000000',slippageBps:9999 };
   const result = await request(route,{ ...body, quote:attackerQuote });
   assert.equal(result.status,200,JSON.stringify(result.body));
@@ -90,24 +97,39 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
 test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation', async t => {
   const oldLive = process.env.GMGN_LIVE;
   const oldToken = process.env.GMGN_LOCAL_TOKEN;
+  const oldBroadcast = process.env.GMGN_SOL_BROADCAST;
+  const oldLedgerPath = process.env.GMGN_TRADE_LEDGER_PATH;
+  const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-rpc-ledger-'));
   process.env.GMGN_LIVE = '0';
   process.env.GMGN_LOCAL_TOKEN = 'rpc-test-token';
+  process.env.GMGN_SOL_BROADCAST = '0';
+  process.env.GMGN_TRADE_LEDGER_PATH = path.join(ledgerDir, 'ledger.json');
   t.after(() => {
     if (oldLive === undefined) delete process.env.GMGN_LIVE; else process.env.GMGN_LIVE = oldLive;
     if (oldToken === undefined) delete process.env.GMGN_LOCAL_TOKEN; else process.env.GMGN_LOCAL_TOKEN = oldToken;
+    if (oldBroadcast === undefined) delete process.env.GMGN_SOL_BROADCAST; else process.env.GMGN_SOL_BROADCAST = oldBroadcast;
+    if (oldLedgerPath === undefined) delete process.env.GMGN_TRADE_LEDGER_PATH; else process.env.GMGN_TRADE_LEDGER_PATH = oldLedgerPath;
+    fs.rmSync(ledgerDir, { recursive: true, force: true });
   });
   const forwarded = [];
+  let failNextBroadcast = false;
   t.mock.method(globalThis, 'fetch', async (_url, init) => {
-    forwarded.push(JSON.parse(init.body).method);
+    const method = JSON.parse(init.body).method;
+    forwarded.push(method);
+    if (method === 'sendTransaction' && failNextBroadcast) {
+      failNextBroadcast = false;
+      throw new Error('fixture response lost after dispatch');
+    }
     return Response.json({ jsonrpc:'2.0', id:7, result:'mock-only' });
   });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
-  const request = (body, token='rpc-test-token') => new Promise((resolve, reject) => {
+  const request = (body, token='rpc-test-token', tradeId) => new Promise((resolve, reject) => {
     const req = http.request({ hostname:'127.0.0.1', port:server.address().port,
       path:'/api/sol/rpc', method:'POST',
-      headers:{ 'content-type':'application/json', 'x-gmgn-token':token } }, res => {
+      headers:{ 'content-type':'application/json', 'x-gmgn-token':token,
+        ...(tradeId ? { 'x-gmgn-trade-id':tradeId } : {}) } }, res => {
         res.resume(); res.on('end', () => resolve(res.statusCode));
       });
     req.on('error', reject); req.end(JSON.stringify(body));
@@ -122,6 +144,21 @@ test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation'
     assert.equal(await request(call(method)), 200);
   }
   process.env.GMGN_LIVE = '1';
-  assert.equal(await request(call('sendTransaction')), 200);
+  assert.equal(await request(call('sendTransaction')), 403);
+  assert.deepEqual(forwarded, ['getBalance','getSignatureStatuses','simulateTransaction']);
+  process.env.GMGN_SOL_BROADCAST = '1';
+  const tradeId = 'rpc-test-trade-id-1';
+  const signedTx = { ...call('sendTransaction'), params:['AQ=='] };
+  assert.equal(await request(signedTx, 'rpc-test-token', tradeId), 200);
+  assert.equal(await request(signedTx, 'rpc-test-token', tradeId), 200);
+  assert.equal(await request({ ...signedTx, params:['Ag=='] }, 'rpc-test-token', tradeId), 409);
   assert.deepEqual(forwarded, ['getBalance','getSignatureStatuses','simulateTransaction','sendTransaction']);
+  const uncertainTrade = { ...signedTx, params:['Aw=='] };
+  const uncertainId = 'rpc-test-uncertain-id';
+  failNextBroadcast = true;
+  assert.equal(await request(uncertainTrade, 'rpc-test-token', uncertainId), 502);
+  assert.equal(await request(uncertainTrade, 'rpc-test-token', uncertainId), 409);
+  assert.deepEqual(forwarded, [
+    'getBalance','getSignatureStatuses','simulateTransaction','sendTransaction','sendTransaction',
+  ]);
 });

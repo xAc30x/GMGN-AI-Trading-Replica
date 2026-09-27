@@ -25,6 +25,7 @@ dist-ssr
 
 # Secrets — never commit
 server/.env
+server/.trade-ledger.json
 .env
 .env.*
 !.env.example

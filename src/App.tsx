@@ -13,10 +13,18 @@ import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
-import { loadLivePositions, recordLivePosition, saveLivePositions } from './positions';
+import {
+  loadLivePositions,
+  loadTradeAttempts,
+  reconcileWalletTrades,
+  TRADE_JOURNAL_STORAGE_KEY,
+  LIVE_POSITIONS_STORAGE_KEY,
+  type PortfolioLimits,
+  type TradeAttempt,
+} from './positions';
 import { fetchHealth } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
-import { isPublicSolanaRpc } from './solana/constants';
+import { isPublicSolanaRpc, makeConnection } from './solana/constants';
 import { hasLocalToken } from './localToken';
 import {
   DEFAULT_TRENDING_CMD,
@@ -48,6 +56,8 @@ export default function App() {
   const [buyAmount, setBuyAmount] = useState(0.01);
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
   const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
+  const [tradeAttempts, setTradeAttempts] = useState<TradeAttempt[]>(loadTradeAttempts);
+  const [portfolioLimits, setPortfolioLimits] = useState<PortfolioLimits>({ maxPortfolioSol: 0.1, maxOpenPositions: 5 });
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
   const [buyToken, setBuyToken] = useState<ScreenToken | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -57,6 +67,28 @@ export default function App() {
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  const reconcileTrades = useCallback(async () => {
+    if (!wallet.publicKey) return;
+    try {
+      const walletAddress = wallet.publicKey.toBase58();
+      const attempts = await reconcileWalletTrades(makeConnection(), walletAddress);
+      setTradeAttempts(attempts);
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+      const unresolved = attempts.filter(attempt => attempt.walletAddress === walletAddress &&
+        (attempt.status === 'submitted' || attempt.status === 'unknown'));
+      if (unresolved.length > 0) {
+        showToast(`${unresolved.length} trade signature(s) remain unresolved; reconcile before retrying`);
+      }
+    } catch {
+      showToast('Trade reconciliation unavailable; pending signatures remain reserved');
+    }
+  }, [wallet.publicKey, showToast]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -68,14 +100,37 @@ export default function App() {
 
   useEffect(() => {
     void fetchHealth()
-      .then((h) => setLiveReady(h.liveReady))
+      .then((h) => {
+        setLiveReady(h.liveReady);
+        setPortfolioLimits({
+          maxPortfolioSol: h.maxPortfolioSol ?? 0.1,
+          maxOpenPositions: h.maxOpenPositions ?? 5,
+        });
+      })
       .catch(() => setLiveReady(false));
   }, []);
 
   useEffect(() => {
-    try { saveLivePositions(positions); }
-    catch { setToast('Position storage unavailable. Keep transaction signatures before closing this page.'); }
-  }, [positions]);
+    const syncStoredTrades = (event: StorageEvent) => {
+      if (event.key && event.key !== LIVE_POSITIONS_STORAGE_KEY && event.key !== TRADE_JOURNAL_STORAGE_KEY) return;
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+      setTradeAttempts(loadTradeAttempts());
+    };
+    window.addEventListener('storage', syncStoredTrades);
+    return () => window.removeEventListener('storage', syncStoredTrades);
+  }, []);
+
+  useEffect(() => {
+    void reconcileTrades();
+    const onFocus = () => { void reconcileTrades(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') onFocus(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [reconcileTrades]);
 
   const visiblePositions = positions.filter(p => mode === 'SHADOW'
     ? p.demo
@@ -86,11 +141,6 @@ export default function App() {
     [visiblePositions],
   );
   const escapeAlerts = visiblePositions.filter((p) => p.demo && (p.alert || p.pnlPct < -10)).length;
-
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2800);
-  }, []);
 
   const appendLog = useCallback((kind: LogEntry['kind'], category: string, message: string) => {
     setLogs((prev) => [
@@ -118,6 +168,10 @@ export default function App() {
         const solLive = Boolean(h.solLiveEnabled ?? h.liveEnabled);
         if (!solLive) {
           showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
+          return;
+        }
+        if (m === 'LIVE' && chain === 'SOL' && !h.solBroadcastEnabled) {
+          showToast('SOL transaction broadcast is disabled — PAPER remains available without it');
           return;
         }
         if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
@@ -205,18 +259,8 @@ export default function App() {
         'live',
         `SOL wallet swap: ${token.symbol} · ${amount} SOL · tx ${meta.hash?.slice(0, 10) || '?'}…`,
       );
-      setPositions(prev => recordLivePosition(prev, {
-        id: 'live-' + meta.hash,
-        symbol: token.symbol,
-        address: meta.tokenAddress,
-        walletAddress: meta.walletAddress,
-        signature: meta.hash,
-        pnlPct: 0,
-        sizeSol: amount,
-        entryAge: '0m',
-        chain: 'SOL',
-        demo: false,
-      }));
+      setTradeAttempts(loadTradeAttempts());
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
       showToast(meta.hash ? `Wallet swap landed · ${meta.hash.slice(0, 12)}…` : 'Wallet swap submitted');
       window.setTimeout(() => setBuyToken(null), 1200);
       return;
@@ -273,7 +317,8 @@ export default function App() {
           percent: 100,
           slippageBps: 100,
         });
-        setPositions((prev) => prev.filter((p) => p.id !== id));
+        setTradeAttempts(loadTradeAttempts());
+        setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         appendLog(
           'SELL',
           'live',
@@ -281,6 +326,9 @@ export default function App() {
         );
         showToast(`Closed · ${res.signature.slice(0, 12)}…`);
       } catch (e) {
+        setTradeAttempts(loadTradeAttempts());
+        setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+        void reconcileTrades();
         showToast(e instanceof Error ? e.message : 'SOL close failed');
       }
       return;
@@ -382,6 +430,10 @@ export default function App() {
         amount={buyAmount}
         mode={mode}
         chain={chain}
+        positions={positions}
+        tradeAttempts={tradeAttempts}
+        portfolioLimits={portfolioLimits}
+        onReconcile={() => { void reconcileTrades(); }}
         onClose={() => setBuyToken(null)}
         onConfirm={handleBuyConfirm}
       />

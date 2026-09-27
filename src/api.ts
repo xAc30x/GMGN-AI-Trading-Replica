@@ -8,6 +8,8 @@ export interface HealthResponse {
   liveEnabled?: boolean;
   tokenConfigured?: boolean;
   maxNativeAmount?: number;
+  maxPortfolioSol?: number;
+  maxOpenPositions?: number;
   /** Always true in this build — server never signs LIVE swaps. */
   serverSigningDisabled?: boolean;
   credentials: {
@@ -21,6 +23,7 @@ export interface HealthResponse {
   /** Quote-ready (API key + wallet + GMGN_LIVE + local token). Not a signing ready flag. */
   liveReady: boolean;
   solLiveEnabled?: boolean;
+  solBroadcastEnabled?: boolean;
   solWalletTrading?: boolean;
   maxSlippageBps?: number;
   defaultSlippageBps?: number;
@@ -223,6 +226,12 @@ export function fetchSolSwapTx(body: {
   amountLamports?: string;
   slippageBps?: number;
   userPublicKey: string;
+  tradeId: string;
+  portfolio: {
+    currentExposureSol: number;
+    openPositions: number;
+    isExistingMint: boolean;
+  };
   quote?: Record<string, unknown>;
   confirm: true;
   mode: 'LIVE';

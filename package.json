@@ -20,6 +20,7 @@
     "@solana/wallet-adapter-react-ui": "^0.9.40",
     "@solana/wallet-adapter-solflare": "^0.6.34",
     "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
     "buffer": "^6.0.3",
     "concurrently": "^10.0.5",
     "cors": "^2.8.6",

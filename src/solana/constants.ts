@@ -26,6 +26,21 @@ export function makeConnection(): Connection {
   });
 }
 
+/** Transaction broadcasts must always pass through the server's default-off gate. */
+export function makeBroadcastConnection(tradeId: string): Connection {
+  const token = getLocalToken();
+  const proxyUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}${RPC_PROXY_PATH}`
+    : `http://127.0.0.1:5173${RPC_PROXY_PATH}`;
+  return new Connection(proxyUrl, {
+    commitment: 'confirmed',
+    httpHeaders: {
+      ...(token ? { 'X-GMGN-Token': token } : {}),
+      'X-GMGN-Trade-Id': tradeId,
+    },
+  });
+}
+
 export const DEFAULT_SLIPPAGE_BPS = 100;
 export const MAX_SLIPPAGE_BPS = 300;
 

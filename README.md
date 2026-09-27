@@ -14,15 +14,17 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 
 ## Hard rails
 
-1. `GMGN_LIVE=1` required for `/api/sol/*` and legacy quote routes
-2. `X-GMGN-Token` required (from `GMGN_LOCAL_TOKEN` in `server/.env`)
-3. Spend cap: `GMGN_MAX_NATIVE_AMOUNT` (default **0.05 SOL**)
-4. Slippage ceiling: `GMGN_MAX_SLIPPAGE_BPS` (default **300** = 3%)
-5. Demo/placeholder mints denylisted; buy field starts empty; re-type CA
-6. `/api/swap` and `/api/close` (gmgn-cli) return **410**
-7. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
-8. SL/TP text is **not** placed on-chain
-9. Screening / PnL / wallet eval in the UI are still **mock** — do not treat them as risk checks
+1. `GMGN_LIVE=1` required for `/api/sol/*` and legacy quote routes; this does not enable broadcast
+2. `GMGN_SOL_BROADCAST=1` is a separate, default-off opt-in required to forward Solana `sendTransaction`
+3. `X-GMGN-Token` required (from `GMGN_LOCAL_TOKEN` in `server/.env`)
+4. Spend cap: `GMGN_MAX_NATIVE_AMOUNT` (default **0.05 SOL**)
+5. Aggregate tracked exposure cap: `GMGN_MAX_PORTFOLIO_SOL` (default **0.1 SOL**) and `GMGN_MAX_OPEN_POSITIONS` (default **5**)
+6. Slippage ceiling: `GMGN_MAX_SLIPPAGE_BPS` (default **300** = 3%)
+7. Demo/placeholder mints denylisted; buy field starts empty; re-type CA
+8. `/api/swap` and `/api/close` (gmgn-cli) return **410**
+9. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
+10. SL/TP text is **not** placed on-chain
+11. Screening / PnL / wallet eval in the UI are still **mock** — do not treat them as risk checks
 
 ## Run
 
@@ -30,6 +32,7 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 cd /home/gptanonymous/gmgn-ai-trader-replica
 npm install
 export GMGN_LIVE=1
+# GMGN_SOL_BROADCAST stays unset; PAPER quotes/simulations do not need broadcast permission.
 export GMGN_MAX_NATIVE_AMOUNT=0.05
 npm run dev:all
 ```
@@ -38,8 +41,9 @@ Open http://127.0.0.1:5173/
 
 1. Paste `GMGN_LOCAL_TOKEN` from `server/.env` into **Credentials**
 2. Connect **Phantom** or **Solflare**
-3. Chain **SOL** → MODE **LIVE**
-4. Buy → paste real mint twice → set slippage → check the box → **Sign SOL swap in wallet**
+3. Keep SOL broadcast disabled while testing PAPER. SOL LIVE also requires the separate
+  `GMGN_SOL_BROADCAST=1` server opt-in; do not set it until live execution is separately authorized.
+4. For PAPER, enter a real mint and simulate it. Do not set `GMGN_SOL_BROADCAST` or enter SOL LIVE during this setup.
 
 Optional: set `VITE_SOLANA_RPC_URL` to a dedicated RPC (Helius / QuickNode). Public mainnet RPC is fine for smoke tests, flaky for production.
 
@@ -105,22 +109,28 @@ Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm 
 - server/.env loads before provider limits/RPC constants. Invalid numeric limits fail.
   Put browser RPC configuration in Vite's environment; it is separate from server configuration.
 - Confirmation checks the execution error and uses the submitted blockhash.
-  Unknown confirmation errors include the signature: inspect it before retrying.
+  The journal saves the signature before broadcast; unresolved signatures stay reserved
+  and are checked again when that wallet reconnects. Inspect unknown signatures before retrying.
+- Web Locks serialize wallet actions across tabs. A persisted trade ID and signed-payload hash
+  make RPC retries idempotent; a reused ID with different bytes is rejected.
 - Live records are stored in this browser and separated by wallet + chain + mint.
-  They are tracked holdings, not reconciled accounting or exact purchase lots.
+  Exposure uses tracked SOL cost, not current market value or exact token accounting.
   Close still explicitly sells the connected wallet's entire mint balance.
   Switching wallets cannot close another wallet's tracked record. PAPER/SHADOW cannot erase live records.
+- Buys check tracked exposure and open-mint limits in the UI, again under the wallet lock,
+  and at the server swap-build route. These are local-app guardrails, not chain-authoritative limits.
 - LIVE/PAPER hide mock metrics. Wallet analysis and the copy calculator are labeled illustrative.
 
-Tests use mocked providers and local ephemeral HTTP listeners; they never sign or send trades.
+Tests use mocked providers and loopback-only HTTP fixtures. The end-to-end test signs a fixture
+transaction with an ephemeral key and sends it only to the controlled local RPC; it never reaches a chain.
 Importing the Express app does not start a server or generate/remove credentials.
 
 Remaining boundaries: Jupiter and the selected RPC are trusted providers; transaction instructions
 are not independently decoded as a full swap policy. Wallet approval remains mandatory.
-Local browser storage is not a durable shared execution ledger. In-tab signing is serialized,
-but cross-tab idempotency, recovery/reconciliation, portfolio limits, strategy validation,
-and automated exits remain separate work. Close safety gates and the close-size bound remain
-in force; this patch does not bypass them to sell unsafe tokens.
+Browser-held positions are not reconciled to token quantities or live market value, and browser
+storage is not shared across devices. The server ledger records broadcast idempotency, not a complete
+portfolio/accounting ledger. Strategy validation and automated exits are not implemented. Close
+safety gates and the close-size bound remain in force.
 
 ### Private production deployment
 

@@ -36,3 +36,5 @@ test-results
 .env
 .env.*
 !.env.example
+
+server/.research.sqlite*

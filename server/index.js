@@ -30,6 +30,9 @@ import {
 import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
+import { registerResearchRoutes } from './researchRoutes.js';
+import { marketSnapshots } from './discovery.js';
+import { recordScan } from './researchStore.js';
 import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
@@ -1103,6 +1106,9 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 
 
 registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken });
+const startResearchMonitor = registerResearchRoutes(app, {
+  requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled,
+});
 
 /** Batch mint-safety for watchlist (max 8, sequential to be kind to RugCheck/GoPlus). */
 app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (req, res) => {
@@ -1154,7 +1160,19 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
         });
       }
     }
-    res.json({ ok: true, results, scannedAt: new Date().toISOString() });
+    const validMints = results.filter(r => !r.error).map(r => r.mint);
+    let market = [];
+    let marketError = null;
+    try { market = await marketSnapshots(validMints); } catch (e) { marketError = e.message; }
+    const observedAt = Date.now();
+    const snapshots = results.map(r => ({
+      ...(market.find(t => t.mint === r.mint) || { mint: r.mint, symbol: '', priceUsd: null, missingMarketData: true }),
+      marketError,
+      safety: { ok: r.ok, blockers: r.blockers || [], warnings: r.warnings || [],
+        score: r.rug?.rugcheck?.scoreNormalised ?? null, checkedAt: observedAt },
+    }));
+    const scanId = recordScan('watchlist', snapshots, observedAt);
+    res.json({ ok: true, results, scanId, scannedAt: new Date(observedAt).toISOString() });
   } catch (e) {
     res.status(e.status || 500).json({ ok: false, error: e.message });
   }
@@ -1170,6 +1188,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   loadEnvFile();
   stripPersistedPrivateKey();
   ensureLocalToken();
+  startResearchMonitor();
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
     console.log(`CORS origin: ${VITE_ORIGIN}`);

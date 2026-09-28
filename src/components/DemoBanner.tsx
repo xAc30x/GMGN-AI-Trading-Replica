@@ -3,7 +3,7 @@ export function DemoBanner() {
     <div className="demo-banner">
       <span aria-hidden>⚠</span>
       <span>
-        Unaffiliated UI replica · SHADOW = mock only · PAPER = quote/rug/simulate (no send) · LIVE =
+        Unaffiliated UI replica · SHADOW = mock only · PAPER = persistent virtual portfolio (no send) · LIVE =
         wallet-signed SOL via Jupiter — not official GMGN, not investment advice.
       </span>
       <a

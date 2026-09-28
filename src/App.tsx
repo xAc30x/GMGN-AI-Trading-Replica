@@ -12,6 +12,7 @@ import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
+import { ResearchPanel } from './components/ResearchPanel';
 import { useLivePnl } from './useLivePnl';
 import { addWatchMint } from './watchlist';
 import { SettingsModal } from './components/SettingsModal';
@@ -63,6 +64,7 @@ export default function App() {
   const [command, setCommand] = useState(DEFAULT_TRENDING_CMD);
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
+  const [paperVersion, setPaperVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
@@ -175,7 +177,7 @@ export default function App() {
         showToast('Server not reachable — start npm run server');
         return;
       }
-      if (chain === 'SOL' && !wallet.connected) {
+      if (m === 'LIVE' && chain === 'SOL' && !wallet.connected) {
         showToast('Connect Phantom or Solflare first (needed as fee-payer pubkey)');
         return;
       }
@@ -188,7 +190,9 @@ export default function App() {
         if (!ok) return;
       } else {
         const ok = window.confirm(
-          'PAPER mode: real quotes + rug checks + RPC simulate. Nothing is signed or sent. Continue?',
+          chain === 'SOL'
+            ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
+            : 'PAPER on this chain creates quote/copy intents only. Continue?',
         );
         if (!ok) return;
       }
@@ -241,9 +245,11 @@ export default function App() {
       appendLog(
         'BUY',
         'paper',
-        `PAPER sim ok: ${token.symbol} · ${amount} SOL · CA ${meta.tokenAddress.slice(0, 8)}… (not sent)`,
+        `PAPER position opened: ${token.symbol} · ${amount} SOL · CA ${meta.tokenAddress.slice(0, 8)}… (virtual funds)`,
       );
-      showToast('PAPER simulation recorded — nothing sent on-chain');
+      setPaperVersion(v => v + 1);
+      setBuyToken(null);
+      showToast('Paper position saved — tracking simulated exits');
       return;
     }
 
@@ -412,6 +418,7 @@ export default function App() {
                   />
                 </>
               )}
+              {mode !== 'SHADOW' && chain === 'SOL' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
             <div className="col-side">

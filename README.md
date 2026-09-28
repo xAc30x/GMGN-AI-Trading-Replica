@@ -6,7 +6,8 @@ Unaffiliated Vite + React UI inspired by the GMGN AI Trader demo, with a local E
 
 | Mode | Behavior |
 |------|----------|
-| SHADOW | Simulate only |
+| SHADOW | Mock UI / intent only |
+| PAPER (SOL) | Persistent virtual portfolio using fresh quotes and modeled costs/exits |
 | **SOL LIVE** | Jupiter builds an **unsigned** swap; **your wallet** signs (Phantom / Solflare) |
 | Other chains LIVE | Quote + copy intent only — no in-app submit |
 
@@ -142,7 +143,7 @@ balances, fees, and quote data; the client supports only its explicitly decoded 
 instruction variant and rejects other variants. The file-backed ledger is suitable only for a
 single shared backend filesystem, not horizontally scaled or multi-host deployment. Wallet approval
 remains mandatory. Strategy validation, audited deployment controls, distributed accounting, and
-automated exits are not implemented. No trade should be submitted against real services until those
+automated real-money exits are not implemented. No trade should be submitted against real services until those
 boundaries are separately reviewed and authorized.
 
 ### Private production deployment
@@ -180,3 +181,81 @@ validator, default-off broadcast gate, durable reservations, and signature recon
 
 The original replica and audit worktrees remain available; their execution-path
 variants were not merged over the release safeguards.
+
+## Persistent research and paper portfolio
+
+Discovery now saves each successful feed scan in `server/.research.sqlite` (override
+with `GMGN_RESEARCH_DB_PATH`). The SQLite database is separate from real-trade
+reservations, permissioned to 0600, and excluded from Git. Keep it on persistent
+local storage and back it up with the server stopped. Importing the app does not
+create the database or start a monitor.
+
+Each scan records up to 30 Solana candidates in provider feed order, including
+liquidity rejects, missing-market-data candidates, and failed safety checks. The
+UI still shows at most 15 candidates meeting the discovery liquidity floor.
+Watchlist scans are also saved with market snapshots where available.
+Snapshots retain the feed, time, market fields, safety decision/reasons and
+`safety-only-v1` strategy identifier. These are observations from the selected
+feeds, not an exhaustive market sample, and repeated scans are not independent
+trades. Scans are collected when discovery is requested (normally every 60s while
+the discovery tab is visible); there is no autonomous discovery scheduler yet.
+
+The executable backend checks pending 5m, 1h and 24h USD-price outcomes every 15s.
+Prices are observed on/after the target time, within a two-minute window. Missing
+prices are unknown, and missed windows after downtime are labeled `missed` rather
+than backfilled with current prices. These market returns exclude trading costs
+and are distinct from paper P&L. Both accepted and rejected candidates are tracked.
+
+SOL PAPER now opens durable virtual positions through the dedicated paper API;
+it does not build a transaction or require a connected wallet. This replaces the
+UI's one-shot RPC simulation; the existing low-level simulation helper remains
+available. There is one shared research account per backend database, starting
+with **1 virtual SOL**, at most **5 open positions**, and one open position per
+mint. The existing server per-trade amount cap also applies. Request IDs make
+entry retries idempotent; cash debits, credits and position changes use SQLite
+transactions. Closed positions and entry/exit failure events are retained.
+
+The explicit, unvalidated `quote-min-output-v1` model uses:
+
+- Fresh mint safety checks before entry, then a **1s delay** and a server-owned
+  Jupiter ExactIn quote. No browser-supplied price or quantity is trusted.
+- Quote minimum output on entry **and** exit to model adverse slippage. Price
+  impact and route trading fees are already reflected in the quote; no extra
+  percentage fee is added on top.
+- **0.00001 SOL estimated network/priority fee per side**, plus **0.00203928 SOL
+  estimated entry account rent**, conservatively assuming no rent refund. These
+  are model assumptions, not measured transaction fees or exact account costs.
+- Full-position exits at **-20% net P&L**, **+30% net P&L**, or **60 minutes**, plus
+  manual close. Each exit obtains another quote after the delay, so the simulated
+  fill can pass a stop/target. Positions retain their model parameters across restarts.
+- No fabricated fill on quote failure: the position stays open and a triggered
+  exit remains pending for retry, including after restart. Provider failures are
+  treated as no attempt reaching the chain, so no execution fee is charged for
+  those failures. Transaction-level failure probability, MEV, and actual priority
+  fee variability are not modeled.
+
+Monitoring continues while the executable backend and existing `GMGN_LIVE`
+market-service gate are enabled, even when the browser is closed. No broadcast
+flag is required or changed. With the service gate off, stored history and account
+state remain readable, but entries, closes and monitoring pause. Restart the
+backend after installing this change. Runtime flags are not enabled by installation.
+The research panel appears in SOL PAPER/LIVE; PAPER buys create virtual positions,
+while LIVE buys retain the wallet-signed execution path.
+
+Marks older than 45s or failed quotes do not count as fresh equity. Net realized
+P&L includes entry rent and modeled fees on both sides. Aggregate stats cover all
+trades; the UI shows all open positions plus recent closed positions (100 total), and 30 scan observations. These
+results validate the simulation assumptions, not profitability in real execution.
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/research/scans?limit=50` | Authenticated scan history; max 100 rows. Page using the last row's `at` as `before` and `id` as `beforeId`. |
+| `GET /api/paper/portfolio` | Authenticated persisted cash, positions, metrics and recent events. |
+| `POST /api/paper/open` | `{id, mint, symbol, amount, slippageBps}`; virtual entry only. |
+| `POST /api/paper/close` | `{id}`; full virtual exit, idempotent after close. |
+| `POST /api/paper/refresh` | Refresh marks/outcomes, throttled to one run per 15s. |
+
+All paper writes require the existing service gate and access token. The automatic
+research monitor only reads provider data and mutates this local research database;
+it cannot sign or broadcast. Automated tests use temporary databases, fake clocks,
+mocked providers and browser API fixtures, never real trades.

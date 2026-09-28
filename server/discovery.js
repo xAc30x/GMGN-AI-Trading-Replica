@@ -80,13 +80,17 @@ export function summarizePairs(pairs, addresses, now = Date.now()) {
   return addresses.map((a) => best.get(a)).filter(Boolean);
 }
 
-export async function discoverTokens(source, { minLiquidityUsd = 0, limit = 15 } = {}) {
+export async function discoverTokens(source, { minLiquidityUsd = 0, limit = 15, includeUnavailable = false } = {}) {
   const path = DISCOVERY_SOURCES[source];
   if (!path) throw Object.assign(new Error('source must be trending or new'), { status: 400 });
   const addresses = solanaAddresses(await dsJson(path), 30);
   if (!addresses.length) return [];
   const pairs = await dsJson(`/tokens/v1/solana/${addresses.join(',')}`);
-  return summarizePairs(pairs, addresses)
+  const summaries = summarizePairs(pairs, addresses);
+  const candidates = includeUnavailable ? addresses.map(mint => summaries.find(t => t.mint === mint) || {
+    mint, symbol: '', priceUsd: null, liquidityUsd: 0, missingMarketData: true,
+  }) : summaries;
+  return candidates
     .filter((t) => t.liquidityUsd >= minLiquidityUsd)
     .slice(0, limit);
 }
@@ -118,4 +122,13 @@ export async function pricesInSol(mints) {
   const value = { prices, solUsd, at: Date.now() };
   priceCache = { key, at: Date.now(), value };
   return value;
+}
+
+export async function marketPricesUsd(mints) {
+  return usdPricesFromPairs(await dsJson(`/tokens/v1/solana/${mints.join(',')}`), mints);
+}
+
+export async function marketSnapshots(mints) {
+  if (!mints.length) return [];
+  return summarizePairs(await dsJson(`/tokens/v1/solana/${mints.join(',')}`), mints);
 }

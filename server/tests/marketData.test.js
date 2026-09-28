@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Connection } from '@solana/web3.js';
 import { solanaAddresses, summarizePairs, usdPricesFromPairs } from '../discovery.js';
 
@@ -23,6 +26,8 @@ test('discovery uses unique Solana base assets, deepest liquidity and valid nume
 
 test('market routes enforce auth/service gate, bound requests, screen discoveries and expire cached quotes', async t => {
   const before = { ...process.env };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-market-'));
+  process.env.GMGN_RESEARCH_DB_PATH = path.join(dir, 'research.sqlite');
   process.env.GMGN_LOCAL_TOKEN = 'market-test-token';
   process.env.GMGN_LIVE = '0';
   process.env.GMGN_PNL_QUOTES_PER_MIN = '1';
@@ -31,7 +36,8 @@ test('market routes enforce auth/service gate, bound requests, screen discoverie
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
     await new Promise(resolve => server.close(resolve));
-    for (const key of ['GMGN_LOCAL_TOKEN', 'GMGN_LIVE', 'GMGN_PNL_QUOTES_PER_MIN']) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    for (const key of ['GMGN_LOCAL_TOKEN', 'GMGN_LIVE', 'GMGN_PNL_QUOTES_PER_MIN', 'GMGN_RESEARCH_DB_PATH']) {
       if (before[key] === undefined) delete process.env[key]; else process.env[key] = before[key];
     }
   });
@@ -80,6 +86,26 @@ test('market routes enforce auth/service gate, bound requests, screen discoverie
   assert.equal(discovery.status, 200);
   assert.equal(discovery.body.tokens.length, 1);
   assert.equal(discovery.body.tokens[0].safety.ok, false);
+  assert.ok(discovery.body.scanId);
+  assert.equal((await request('/api/research/scans', undefined, 'wrong')).status, 401);
+  assert.equal((await request('/api/research/scans')).body.totals.blocked, 1);
+  assert.equal((await request('/api/paper/portfolio', undefined, 'wrong')).status, 401);
+  assert.equal((await request('/api/paper/portfolio')).body.account.cash, '1000000000');
+  assert.equal((await request('/api/research/scans?limit=999')).status, 400);
+  process.env.GMGN_LIVE = '0';
+  for (const route of ['open', 'close', 'refresh']) {
+    assert.equal((await request('/api/paper/' + route, {})).status, 403);
+  }
+  assert.equal((await request('/api/paper/portfolio')).status, 200);
+  process.env.GMGN_LIVE = '1';
+  assert.equal((await request('/api/paper/open', { id: 'paper-request-0001', mint, amount: 0.01 })).status, 400);
+  assert.equal((await request('/api/paper/portfolio')).body.stats.open, 0);
+  const watch = await request('/api/sol/watchlist-scan', { mints: [mint] });
+  assert.equal(watch.status, 200);
+  assert.ok(watch.body.scanId);
+  const saved = (await request('/api/research/scans')).body;
+  assert.equal(saved.totals.observations, 2);
+  assert.ok(saved.rows.some(row => row.source === 'watchlist'));
   assert.equal((await request(`/api/sol/prices?mints=${mint}`)).body.prices[mint], 0.02);
   const first = await request('/api/sol/position-values', { items });
   assert.equal(first.body.results[0].outLamports, '20000000');

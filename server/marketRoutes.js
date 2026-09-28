@@ -3,6 +3,7 @@ import { SOL_MINT, getQuote as jupiterQuote } from './jupiterSol.js';
 import { discoverTokens, pricesInSol } from './discovery.js';
 import { assessMint } from './mintSafety.js';
 import { MIN_LIQUIDITY_USD } from './rugScanner.js';
+import { recordScan } from './researchStore.js';
 
 export function registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken }) {
   // Read-only mark-to-market for tracked holdings: what selling each balance to SOL would return now.
@@ -91,12 +92,13 @@ export function registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, 
       const a = await assessMint(assertOutputToken('sol', mint));
       result = {
         ok: a.ok,
+        checkedAt: Date.now(),
         blockers: a.blockers || [],
         warnings: a.warnings || [],
         score: a.rug?.rugcheck?.scoreNormalised ?? null,
       };
     } catch (e) {
-      result = { ok: false, blockers: [e.message || 'scan failed'], warnings: [], score: null };
+      result = { ok: false, checkedAt: Date.now(), blockers: [e.message || 'scan failed'], warnings: [], score: null };
     }
     safetyCache.set(mint, { at: Date.now(), result });
     if (safetyCache.size > 500) safetyCache.delete(safetyCache.keys().next().value);
@@ -106,15 +108,20 @@ export function registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, 
     const source = req.query.source ?? 'trending';
     if (source !== 'new' && source !== 'trending') return res.status(400).json({ ok: false, error: 'source must be trending or new' });
     try {
-      const tokens = await discoverTokens(source, { minLiquidityUsd: MIN_LIQUIDITY_USD, limit: 15 });
+      const tokens = await discoverTokens(source, { limit: 30, includeUnavailable: true });
+      const observedAt = Date.now();
       const results = [];
       // 3 at a time to stay gentle on RugCheck/GoPlus.
       for (let i = 0; i < tokens.length; i += 3) {
         const batch = tokens.slice(i, i + 3);
-        const safeties = await Promise.all(batch.map((t) => cachedSafety(t.mint)));
+        const safeties = await Promise.all(batch.map((t) => t.missingMarketData || t.liquidityUsd < MIN_LIQUIDITY_USD
+          ? { ok: false, blockers: [t.missingMarketData ? 'Market data unavailable' : 'Discovery liquidity below minimum'], warnings: [], score: null }
+          : cachedSafety(t.mint)));
         batch.forEach((t, j) => results.push({ ...t, safety: safeties[j] }));
       }
-      res.json({ ok: true, source, minLiquidityUsd: MIN_LIQUIDITY_USD, tokens: results, at: new Date().toISOString() });
+      const scanId = recordScan(source, results, observedAt);
+      res.json({ ok: true, source, scanId, minLiquidityUsd: MIN_LIQUIDITY_USD,
+        tokens: results.filter(t => !t.missingMarketData && t.liquidityUsd >= MIN_LIQUIDITY_USD).slice(0, 15), at: new Date(observedAt).toISOString() });
     } catch (e) {
       res.status(e.status || 502).json({ ok: false, error: e.message });
     }

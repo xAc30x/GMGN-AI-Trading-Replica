@@ -363,3 +363,31 @@ export function fetchDiscover(source: 'trending' | 'new'): Promise<{
 export function fetchPricesInSol(mints: string[]): Promise<{ ok: boolean; prices: Record<string, number>; solUsd: number; at: number }> {
   return jsonFetch(`/api/sol/prices?mints=${mints.map(encodeURIComponent).join(',')}`);
 }
+
+export interface PaperPosition {
+  id: string; mint: string; symbol: string; state: 'open' | 'closed'; openedAt: number;
+  costLamports: string; quantityAtomic: string; realisedPnlLamports?: string;
+  closedAt?: number; exitReason?: string; exitPending: string | null; lastError: string | null;
+  mark: { at: number; netLamports: string; pnlPct: number } | null;
+}
+export interface PaperPortfolioResponse {
+  account: { initial: string; cash: string };
+  model: { latencyMs: number; feeLamports: string; entryRentLamports: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
+  positions: PaperPosition[];
+  stats: { open: number; closed: number; wins: number; realisedPnlLamports: string; equityLamports: string | null; netPnlLamports: string | null };
+  workerError: string | null; monitoringEnabled: boolean; at: number;
+}
+export interface ScanHistoryResponse {
+  totals: { observations: number; eligible: number | null; blocked: number | null };
+  outcomeCounts: { status: string; count: number }[];
+  rows: { id: string; scanId: string; at: number; source: string; mint: string; symbol: string; decision: string;
+    safety: { blockers: string[] }; priceUsd: number | null;
+    outcomes: { horizon: number; status: string; returnPct: number | null; error: string | null }[] }[];
+}
+export const fetchPaperPortfolio = () => jsonFetch<PaperPortfolioResponse>('/api/paper/portfolio');
+export const refreshPaperPortfolio = () => jsonFetch<PaperPortfolioResponse>('/api/paper/refresh', { method: 'POST' });
+export const fetchScanHistory = () => jsonFetch<ScanHistoryResponse>('/api/research/scans?limit=30');
+export const openPaperPosition = (body: { id: string; mint: string; symbol: string; amount: number; slippageBps: number }) =>
+  jsonFetch<{ position: PaperPosition }>('/api/paper/open', { method: 'POST', body: JSON.stringify(body) });
+export const closePaperPosition = (id: string) =>
+  jsonFetch<{ position: PaperPosition }>('/api/paper/close', { method: 'POST', body: JSON.stringify({ id }) });

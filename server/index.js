@@ -29,6 +29,7 @@ import {
 } from './jupiterSol.js';
 import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
+import { registerMarketRoutes } from './marketRoutes.js';
 import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
@@ -1100,6 +1101,8 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 }));
 
 
+
+registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken });
 
 /** Batch mint-safety for watchlist (max 8, sequential to be kind to RugCheck/GoPlus). */
 app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (req, res) => {

@@ -137,3 +137,16 @@ test('wallet lock serializes tabs and rejects a matching duplicate', async t => 
   assert.match(duplicateResult.reason.message, /Matching trade is already in progress/);
   assert.equal(loadTradeAttempts().length, 1);
 });
+
+const { computePnl, readTokenBalance } = await loadTs('../../src/pnl.ts');
+test('wallet valuation sums matching accounts and rejects malformed balances instead of hiding holdings', () => {
+  const account = (amount, decimals = 6) => ({ account: { data: { parsed: { info: {
+    owner: 'wallet', mint: 'mint', tokenAmount: { amount, decimals },
+  } } } } });
+  assert.deepEqual(readTokenBalance([account('1000000'), account('2000000')], 'wallet', 'mint'), { atomic: '3000000', tokenAmount: 3 });
+  assert.deepEqual(readTokenBalance([], 'wallet', 'mint'), { atomic: '0', tokenAmount: 0 });
+  assert.throws(() => readTokenBalance([{}], 'wallet', 'mint'), /Invalid/);
+  assert.throws(() => readTokenBalance([account('1')], 'other', 'mint'), /Invalid/);
+  assert.throws(() => readTokenBalance([account('1'), account('1', 9)], 'wallet', 'mint'), /Invalid/);
+  assert.deepEqual(computePnl(0.01, '20000000'), { valueSol: 0.02, pnlPct: 100 });
+});

@@ -312,3 +312,54 @@ export function fetchWatchlistScan(mints: string[]): Promise<WatchlistScanRespon
     body: JSON.stringify({ mints }),
   });
 }
+
+export interface PositionValueResult {
+  mint: string;
+  amountAtomic: string;
+  ok: boolean;
+  outLamports?: string;
+  priceImpactPct?: string;
+  error?: string;
+  stale?: boolean;
+  quotedAt?: number;
+}
+
+export function fetchPositionValues(items: { mint: string; amountAtomic: string }[]): Promise<{
+  ok: boolean;
+  results: PositionValueResult[];
+  at: number;
+}> {
+  return jsonFetch('/api/sol/position-values', { method: 'POST', body: JSON.stringify({ items }) });
+}
+
+export interface DiscoveredToken {
+  mint: string;
+  symbol: string;
+  name: string;
+  dex?: string;
+  url?: string;
+  priceUsd: number | null;
+  liquidityUsd: number;
+  volume24hUsd: number;
+  change1hPct: number | null;
+  change24hPct: number | null;
+  marketCapUsd: number | null;
+  buys1h: number;
+  sells1h: number;
+  ageMinutes: number | null;
+  safety: { ok: boolean; blockers: string[]; warnings: string[]; score: number | null };
+}
+
+export function fetchDiscover(source: 'trending' | 'new'): Promise<{
+  ok: boolean;
+  source: string;
+  minLiquidityUsd: number;
+  tokens: DiscoveredToken[];
+  at: string;
+}> {
+  return jsonFetch(`/api/sol/discover?source=${source}`);
+}
+
+export function fetchPricesInSol(mints: string[]): Promise<{ ok: boolean; prices: Record<string, number>; solUsd: number; at: number }> {
+  return jsonFetch(`/api/sol/prices?mints=${mints.map(encodeURIComponent).join(',')}`);
+}

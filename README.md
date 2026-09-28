@@ -24,12 +24,12 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 8. `/api/swap` and `/api/close` (gmgn-cli) return **410**
 9. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
 10. SL/TP text is **not** placed on-chain
-11. Screening / PnL / wallet eval in the UI are still **mock** — do not treat them as risk checks
+11. SHADOW metrics and wallet evaluation are **mock**; PAPER/LIVE discovery and holdings use provider data
 
 ## Run
 
 ```bash
-cd /home/gptanonymous/gmgn-ai-trader-replica
+cd /home/gptanonymous/gmgn-ai-trader-release
 npm install
 # Keep both actual-service execution gates disabled.
 unset GMGN_LIVE GMGN_SOL_BROADCAST
@@ -152,3 +152,31 @@ Build with `npm ci --ignore-scripts` and `npm run build`, then run
 frontend and API together at http://127.0.0.1:8787. It binds only to loopback.
 Keep LIVE disabled until separately authorized and validated. Production serving
 does not expose the source tree; unknown API routes remain 404.
+
+
+## Consolidated discovery and holdings features
+
+`gmgn-ai-trader-release` is the integration base. Discovery and holdings monitoring
+were ported from local `main` at `a88d3d5` while retaining the release transaction
+validator, default-off broadcast gate, durable reservations, and signature reconciliation.
+
+- In SOL PAPER/LIVE, discovery lists DexScreener top-boosted tokens or latest profiles,
+  screens them with the existing mint checks, and supports adding them to the watchlist.
+  These feeds are not investment rankings or a guarantee that a token just launched.
+  Provider reference: https://docs.dexscreener.com/api/reference
+- Tracked holdings read wallet balances every 15 seconds and request valuations every
+  second while the page is visible. Jupiter quote requests share a process-local
+  `GMGN_PNL_QUOTES_PER_MIN` budget (default 40); cached quotes are labeled and expire
+  after 60 seconds. Market-price fallback is labeled as an estimate.
+- The percentage compares the current whole-wallet mint balance with recorded buy
+  cost. It is not realized PnL or tax accounting: external transfers and partial sales
+  can change that comparison. Quotes exclude network fees and account rent.
+- Two successful zero-balance checks hide a holding without deleting its history or
+  journal. Monitoring continues so a returning balance can reappear. Invalid or failed
+  balance reads do not count as zero. Wallet changes clear the displayed valuation scope.
+- `/api/sol/discover`, `/api/sol/prices`, and `/api/sol/position-values` are read-only,
+  authenticated, and require the existing `GMGN_LIVE` service gate. They cannot submit
+  transactions. No execution flags need changing to run the isolated test suite.
+
+The original replica and audit worktrees remain available; their execution-path
+variants were not merged over the release safeguards.

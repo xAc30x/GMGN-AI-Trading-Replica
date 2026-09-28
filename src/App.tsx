@@ -11,6 +11,9 @@ import { MetricCards } from './components/MetricCards';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
+import { DiscoveryFeed } from './components/DiscoveryFeed';
+import { useLivePnl } from './useLivePnl';
+import { addWatchMint } from './watchlist';
 import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
 import {
@@ -123,6 +126,9 @@ export default function App() {
   const visiblePositions = positions.filter(p => mode === 'SHADOW'
     ? p.demo
     : !p.demo && p.walletAddress === wallet.publicKey?.toBase58());
+  const [watchVersion, setWatchVersion] = useState(0);
+  const { pnl: livePnl, refreshing: pnlRefreshing } = useLivePnl(visiblePositions, wallet.publicKey, mode !== 'SHADOW' && chain === 'SOL');
+  const trackedPositions = visiblePositions.filter(p => (livePnl[p.id]?.zeroStreak ?? 0) < 2);
   const awaiting = tokens.filter((t) => t.decision === 'buy').length;
   const exposure = useMemo(
     () => visiblePositions.reduce((s, p) => s + p.sizeSol, 0),
@@ -194,7 +200,7 @@ export default function App() {
           ? 'Mode LIVE — wallet-signed SOL Jupiter.'
           : 'Mode LIVE — quote/intent only on this chain.'
         : m === 'PAPER'
-          ? 'Mode PAPER — simulate only (no send). Screening table remains mock.'
+          ? 'Mode PAPER — simulate only (no send). Discovery and watchlist use live screening.'
           : 'Mode SHADOW (mock UI only).';
     appendLog('SCREEN', 'mode', msg);
   };
@@ -384,17 +390,32 @@ export default function App() {
                   mode={mode}
                 />
               ) : (
-                <LiveWatchlistTable
-                  buyAmount={buyAmount}
-                  onBuyAmount={setBuyAmount}
-                  onBuy={setBuyToken}
-                  mode={mode}
-                />
+                <>
+                  {chain === 'SOL' && <DiscoveryFeed
+                    buyAmount={buyAmount}
+                    mode={mode}
+                    onBuy={setBuyToken}
+                    onWatch={(mint, symbol) => {
+                      try {
+                        addWatchMint(mint, symbol);
+                        setWatchVersion(v => v + 1);
+                        showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
+                      } catch { showToast('Watchlist storage unavailable'); }
+                    }}
+                  />}
+                  <LiveWatchlistTable
+                    key={watchVersion}
+                    buyAmount={buyAmount}
+                    onBuyAmount={setBuyAmount}
+                    onBuy={setBuyToken}
+                    mode={mode}
+                  />
+                </>
               )}
               <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
             <div className="col-side">
-              <PositionEscapeMonitor positions={visiblePositions} onClose={(id) => void handleClosePosition(id)} />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}

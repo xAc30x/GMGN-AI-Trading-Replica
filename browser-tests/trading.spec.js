@@ -125,6 +125,22 @@ async function installApiFixtures(page, scenario = {}) {
         credentials: { apiKey: false, privateKey: false, wallet: false },
       } });
     }
+    if (url.pathname === '/api/sol/discover') {
+      const base = { mint: mintText, symbol: 'FOUND', name: 'Found token', priceUsd: 2, liquidityUsd: 10000,
+        volume24hUsd: 1000, change1hPct: null, change24hPct: 2, marketCapUsd: 100000, buys1h: 2, sells1h: 1, ageMinutes: 5 };
+      return route.fulfill({ json: { ok: true, source: url.searchParams.get('source'), minLiquidityUsd: 1000,
+        tokens: scenario.discovery ? [
+          { ...base, safety: { ok: true, blockers: [], warnings: [], score: 5 } },
+          { ...base, mint: inputMint.toBase58(), symbol: 'BLOCKEDTOKEN', safety: { ok: false, blockers: ['Provider unavailable'], warnings: [], score: null } },
+        ] : [], at: new Date().toISOString() } });
+    }
+    if (url.pathname === '/api/sol/position-values') {
+      return route.fulfill({ json: { ok: true, results: body.items.map(item => ({ ...item, ok: true,
+        outLamports: '20000000', priceImpactPct: '0.001', quotedAt: Date.now(), stale: Boolean(scenario.stale) })), at: Date.now() } });
+    }
+    if (url.pathname === '/api/sol/prices') {
+      return route.fulfill({ json: { ok: true, prices: { [mintText]: 0.002 }, solUsd: 100, at: Date.now() } });
+    }
     if (url.pathname === '/api/sol/watchlist-scan') {
       return route.fulfill({ json: { ok: true, scannedAt: new Date().toISOString(), results: [{
         mint: mintText,
@@ -167,6 +183,16 @@ async function installApiFixtures(page, scenario = {}) {
     }
     if (url.pathname === '/api/sol/rpc') {
       const rpc = body;
+      if (rpc.method === 'getTokenAccountsByOwner') {
+        return route.fulfill({ json: { jsonrpc: '2.0', id: rpc.id, result: { context: { slot: 11 },
+          value: scenario.zeroBalance ? [] : [{ pubkey: mintText, account: {
+            executable: false, lamports: 1, owner: tokenProgram.toBase58(), rentEpoch: 0,
+            data: { program: 'spl-token', space: 165, parsed: { type: 'account', info: {
+              owner: walletText, mint: mintText, tokenAmount: { amount: '10', decimals: 0, uiAmount: 10 },
+            } } },
+          } }],
+        } } });
+      }
       if (rpc.method === 'getAccountInfo') {
         return route.fulfill({ json: { jsonrpc: '2.0', id: rpc.id, result: {
           context: { slot: 10 },
@@ -202,7 +228,7 @@ async function installApiFixtures(page, scenario = {}) {
   return counts;
 }
 
-async function openLiveTrade(page) {
+async function openLiveTrade(page, openBuy = true) {
   await installWallet(page);
   await page.goto('/');
   await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
@@ -211,6 +237,7 @@ async function openLiveTrade(page) {
   await expect(page.getByRole('button', { name: /MODE PAPER/ })).toBeVisible();
   await page.getByRole('button', { name: /MODE PAPER/ }).click();
   await expect(page.getByRole('button', { name: /MODE LIVE/ })).toBeVisible();
+  if (!openBuy) return;
   await page.getByRole('button', { name: /BUY 0.01 SOL/ }).click();
   await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toBeVisible();
   await page.getByRole('checkbox', { name: /I understand my wallet will spend real SOL/ }).check({ force: true });
@@ -270,4 +297,42 @@ test('uncertain send reconciles by signature and prevents a duplicate submission
   assert.equal(counts.builds, 1);
   assert.equal(counts.sends, 1);
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 1);
+});
+
+
+test('discovery screens tokens, adds a watch entry and opens the existing guarded buy flow', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
+  await openLiveTrade(page, false);
+  const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · LIVE' }) });
+  await expect(discovery.getByText('FOUND', { exact: true })).toBeVisible();
+  const blocked = discovery.getByRole('row').filter({ hasText: 'BLOCKEDTOKEN' });
+  await expect(blocked.getByRole('button', { name: /BUY/ })).toHaveCount(0);
+  const found = discovery.getByRole('row').filter({ hasText: 'FOUND' });
+  await found.getByRole('button', { name: '+ Watch' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.watchlist.v1'))[0].symbol)).toBe('FOUND');
+  await found.getByRole('button', { name: /BUY/ }).click();
+  await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign SOL swap in wallet' })).toBeDisabled();
+  assert.equal(counts.builds, 0);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+});
+
+test('holdings show cached valuation and hide zero balances without deleting trade history', async ({ page }) => {
+  await page.clock.install();
+  const scenario = { stale: true, zeroBalance: false };
+  const counts = await installApiFixtures(page, scenario);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  const holdings = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tracked holdings' }) });
+  await expect(holdings.getByText('+100.00% · 0.02000 SOL · cached quote')).toBeVisible();
+  const positions = await page.evaluate(() => localStorage.getItem('gmgn.positions.v1'));
+  const journal = await page.evaluate(() => localStorage.getItem('gmgn.trades.v1'));
+  scenario.zeroBalance = true;
+  await page.clock.runFor(16000);
+  await expect(holdings.getByText('No balance · checking')).toBeVisible();
+  await page.clock.runFor(16000);
+  await expect(holdings.getByRole('button', { name: 'Close', exact: true })).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.positions.v1')), positions);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.trades.v1')), journal);
+  assert.equal(counts.sends, 1);
 });

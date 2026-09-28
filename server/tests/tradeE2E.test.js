@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import bs58 from 'bs58';
 import {
   Connection,
   Keypair,
@@ -44,8 +45,15 @@ const fixture = http.createServer(async (req, res) => {
         rentEpoch: 0,
       } } });
     }
+    if (call.method === 'getTokenAccountsByOwner') {
+      return send({ jsonrpc: '2.0', id: call.id, result: { context: { slot: 1 }, value: [] } });
+    }
+    if (call.method === 'getSlot' || call.method === 'getBlockHeight') {
+      return send({ jsonrpc: '2.0', id: call.id, result: 1 });
+    }
     if (call.method === 'sendTransaction') {
-      return send({ jsonrpc: '2.0', id: call.id, result: 'controlled-fixture-signature' });
+      const transaction = VersionedTransaction.deserialize(Buffer.from(call.params[0], 'base64'));
+      return send({ jsonrpc: '2.0', id: call.id, result: bs58.encode(transaction.signatures[0]) });
     }
     if (call.method === 'getSignatureStatuses') {
       return send({ jsonrpc: '2.0', id: call.id, result: {
@@ -110,6 +118,7 @@ process.env.GMGN_LIVE = '1';
 process.env.GMGN_SOL_BROADCAST = '1';
 process.env.GMGN_LOCAL_TOKEN = 'controlled-e2e-token';
 process.env.GMGN_TRADE_LEDGER_PATH = path.join(ledgerDir, 'ledger.json');
+process.env.GMGN_PORTFOLIO_LEDGER_PATH = path.join(ledgerDir, 'portfolio.sqlite');
 const { app } = await import('../index.js');
 
 test('unsigned swap build, local RPC broadcast, and confirmation stay on controlled fixtures', async (t) => {
@@ -130,6 +139,7 @@ test('unsigned swap build, local RPC broadcast, and confirmation stay on control
       amount: 0.01,
       slippageBps: 100,
       userPublicKey: wallet.publicKey.toBase58(),
+      tradeId: 'controlled-e2e-trade-id-1',
       portfolio: { currentExposureSol: 0, openPositions: 0, isExistingMint: false },
       confirm: true,
       mode: 'LIVE',
@@ -146,9 +156,12 @@ test('unsigned swap build, local RPC broadcast, and confirmation stay on control
     httpHeaders: { 'X-GMGN-Token': token, 'X-GMGN-Trade-Id': 'controlled-e2e-trade-id-1' },
   });
   const signature = await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 0 });
-  assert.equal(signature, 'controlled-fixture-signature');
+  assert.equal(signature, bs58.encode(transaction.signatures[0]));
   assert.equal(await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 0 }), signature);
   const status = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
   assert.equal(status.value[0].confirmationStatus, 'confirmed');
-  assert.deepEqual(calls, ['getAccountInfo', 'sendTransaction', 'getSignatureStatuses']);
+  assert.equal(calls.filter(method => method === 'sendTransaction').length, 1);
+  assert.equal(calls.filter(method => method === 'getSignatureStatuses').length, 1);
+  assert.ok(calls.includes('getTokenAccountsByOwner'));
+  assert.ok(calls.includes('getBlockHeight'));
 });

@@ -818,6 +818,9 @@ table.screen tr:hover td {
 
 .modal {
   width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-card-2);
   border: 1px solid var(--border-soft);
   border-radius: 14px;

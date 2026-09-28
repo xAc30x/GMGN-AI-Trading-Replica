@@ -227,14 +227,9 @@ export function fetchSolSwapTx(body: {
   slippageBps?: number;
   userPublicKey: string;
   tradeId: string;
-  portfolio: {
-    currentExposureSol: number;
-    openPositions: number;
-    isExistingMint: boolean;
-  };
   quote?: Record<string, unknown>;
   confirm: true;
-  mode: 'LIVE';
+  mode: 'LIVE' | 'PAPER';
 }): Promise<SolSwapTxResponse> {
   return jsonFetch('/api/sol/swap-tx', { method: 'POST', body: JSON.stringify(body) });
 }

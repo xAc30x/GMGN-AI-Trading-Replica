@@ -8,8 +8,11 @@ import { envNumber } from './config.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
+import bs58 from 'bs58';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +30,13 @@ import {
 import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
+import {
+  finishPortfolioReservation,
+  getWalletMintBalance,
+  markPortfolioReservationSubmitted,
+  releasePortfolioReservation,
+  reservePortfolioBuy,
+} from './portfolioLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, '.env');
@@ -35,6 +45,7 @@ const SOLANA_RPC_URL =
   process.env.SOLANA_RPC_URL ||
   process.env.VITE_SOLANA_RPC_URL ||
   'https://api.mainnet-beta.solana.com';
+const portfolioConnection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const RPC_IS_PUBLIC = /api\.mainnet-beta\.solana\.com/i.test(SOLANA_RPC_URL);
 const VITE_ORIGIN = 'http://127.0.0.1:5173';
 
@@ -771,7 +782,8 @@ app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
   let tradeId;
   if (req.body.method === 'sendTransaction') {
     tradeId = req.get('x-gmgn-trade-id');
-    const claim = claimBroadcast(tradeId, req.body.params?.[0]);
+    const signedTransaction = req.body.params?.[0];
+    const claim = claimBroadcast(tradeId, signedTransaction);
     if (claim.kind === 'invalid') {
       return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: claim.error } });
     }
@@ -783,6 +795,31 @@ app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
         ? 'Trade ID was already used for a different signed transaction'
         : 'Trade ID is pending or has a prior uncertain result; reconcile before retrying';
       return res.status(409).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32009, message } });
+    }
+    try {
+      const transaction = VersionedTransaction.deserialize(Buffer.from(signedTransaction, 'base64'));
+      const requiredSignatures = transaction.message.header.numRequiredSignatures;
+      const messageBytes = transaction.message.serialize();
+      const validSignatures = transaction.signatures.length === requiredSignatures &&
+        transaction.signatures.slice(0, requiredSignatures).every((signature, index) => {
+          if (!signature || signature.every((byte) => byte === 0)) return false;
+          const rawKey = transaction.message.staticAccountKeys[index].toBuffer();
+          const publicKey = createPublicKey({
+            key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), rawKey]),
+            format: 'der',
+            type: 'spki',
+          });
+          return verifySignature(null, messageBytes, publicKey, signature);
+        });
+      const signature = transaction.signatures[0];
+      if (!validSignatures) {
+        completeBroadcast(tradeId, { failed: true });
+        return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: 'Signed transaction signature is invalid' } });
+      }
+      await markPortfolioReservationSubmitted(tradeId, bs58.encode(signature));
+    } catch (error) {
+      completeBroadcast(tradeId, { failed: true });
+      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: `Invalid signed transaction: ${error.message}` } });
     }
   }
   try {
@@ -885,12 +922,14 @@ app.post('/api/sol/mint-safety', requireLocalToken, requireLiveFlag, async (req,
  * Client wallet must sign. Never holds a private key.
  */
 app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(async (req, res) => {
+  let reservationId;
+  let reservationKept = false;
   try {
     const body = req.body || {};
-    if (body.confirm !== true || body.mode !== 'LIVE') {
+    if (body.confirm !== true || !['LIVE', 'PAPER'].includes(body.mode)) {
       return res.status(403).json({
         ok: false,
-        error: 'SOL swap-tx rejected: confirm must be true and mode must be LIVE',
+        error: 'SOL swap-tx rejected: confirm must be true and mode must be LIVE or PAPER',
       });
     }
     const userPublicKey = String(body.userPublicKey || '').trim();
@@ -898,6 +937,7 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       return res.status(400).json({ ok: false, error: 'userPublicKey required (base58)' });
     }
     const outputMint = assertOutputToken('sol', body.outputMint || body.outputToken);
+    const tradeId = String(body.tradeId || '');
     const slippageBps = clampSlippageBps(body.slippageBps);
     let lamports;
     if (body.amountLamports != null && body.amountLamports !== '') {
@@ -906,24 +946,21 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       lamports = assertSpendAmount('sol', String(solToLamports(body.amount)));
     }
 
-    const portfolio = body.portfolio || {};
-    const currentExposureSol = Number(portfolio.currentExposureSol);
-    const openPositions = Number(portfolio.openPositions);
-    if (!Number.isFinite(currentExposureSol) || currentExposureSol < 0 ||
-        !Number.isInteger(openPositions) || openPositions < 0 ||
-        typeof portfolio.isExistingMint !== 'boolean') {
-      return res.status(400).json({ ok: false, error: 'Current portfolio exposure and position count are required' });
-    }
-    const nextExposureSol = currentExposureSol + Number(lamports) / 1_000_000_000;
-    if (nextExposureSol > MAX_PORTFOLIO_SOL + 1e-9) {
-      return res.status(400).json({ ok: false, error: `Portfolio cap exceeded: ${MAX_PORTFOLIO_SOL} SOL` });
-    }
-    if (!portfolio.isExistingMint && openPositions >= MAX_OPEN_POSITIONS) {
-      return res.status(400).json({ ok: false, error: `Open-position cap reached: ${MAX_OPEN_POSITIONS}` });
-    }
-
     const safety = await assessMint(outputMint);
     assertMintSafe(safety);
+
+    const portfolio = body.mode === 'LIVE'
+      ? await reservePortfolioBuy({
+        connection: portfolioConnection,
+        walletAddress: userPublicKey,
+        mint: outputMint,
+        tradeId,
+        amountLamports: lamports,
+        maxPortfolioSol: MAX_PORTFOLIO_SOL,
+        maxOpenPositions: MAX_OPEN_POSITIONS,
+      })
+      : null;
+    if (body.mode === 'LIVE') reservationId = tradeId;
 
     // Never use a caller's quote: only the exact validated intent reaches Jupiter.
     const quote = await jupiterQuote({
@@ -938,7 +975,14 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     }
     const swap = await jupiterSwapTx({ quoteResponse: quote, userPublicKey });
     if (!swap.swapTransaction) {
-      return res.status(502).json({ ok: false, error: 'Jupiter did not return swapTransaction' });
+      throw Object.assign(new Error('Jupiter did not return swapTransaction'), { status: 502 });
+    }
+    if (!Number.isSafeInteger(swap.lastValidBlockHeight) || swap.lastValidBlockHeight < 1) {
+      throw Object.assign(new Error('Jupiter transaction expiry is missing or invalid'), { status: 502 });
+    }
+    if (reservationId) {
+      await finishPortfolioReservation(tradeId, swap.lastValidBlockHeight);
+      reservationKept = true;
     }
     res.json({
       ok: true,
@@ -954,8 +998,12 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       outputMint,
       inputMint: SOL_MINT,
       mintSafety: safety,
+      portfolio,
     });
   } catch (e) {
+    if (reservationId && !reservationKept) {
+      try { await releasePortfolioReservation(reservationId); } catch { /* fail closed; stale reservation remains */ }
+    }
     res.status(e.status || 500).json({ ok: false, error: e.message, details: e.details });
   }
 }));
@@ -997,6 +1045,14 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
     }
     if (BigInt(amountAtomic) <= 0n) {
       return res.status(400).json({ ok: false, error: 'Sell amount must be > 0' });
+    }
+    const walletBalance = await getWalletMintBalance({
+      connection: portfolioConnection,
+      walletAddress: userPublicKey,
+      mint: inputMint,
+    });
+    if (BigInt(amountAtomic) > BigInt(walletBalance.amountAtomic)) {
+      return res.status(400).json({ ok: false, error: 'Sell amount exceeds the chain-reconciled wallet balance' });
     }
 
     const safety = await assessMint(inputMint);

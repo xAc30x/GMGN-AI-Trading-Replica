@@ -7,21 +7,21 @@ import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
 import {
   addConfirmedBuy,
-  getPortfolioSnapshot,
   removeConfirmedPosition,
   updateTradeAttempt,
   withWalletTrade,
-  type PortfolioLimits,
   type TradeAttempt,
 } from '../positions';
 import { confirmSwap } from './confirmSwap.ts';
 import { makeBroadcastConnection, makeConnection } from './constants';
+import { validateSwapTransaction } from './validateSwapTransaction.js';
 
 async function signSendBase64(
   wallet: WalletContextState,
   swapTransaction: string,
   attempt: TradeAttempt,
   lastValidBlockHeight?: number,
+  intent?: { inputMint: string; outputMint: string; inputAmount: string; quotedOutput: string; minimumOutput: string; slippageBps: number },
 ): Promise<{ signature: string; explorerUrl: string }> {
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error('Connect a Solana wallet that can sign transactions');
@@ -35,6 +35,13 @@ async function signSendBase64(
       !tx.message.staticAccountKeys[0]?.equals(wallet.publicKey)) {
     throw new Error('Transaction signer does not match the connected wallet');
   }
+  if (!intent) throw new Error('Swap intent is required for independent transaction validation');
+  await validateSwapTransaction({
+    swapTransaction,
+    connection: makeConnection(),
+    walletPublicKey: wallet.publicKey.toBase58(),
+    ...intent,
+  });
   const originalMessage = tx.message.serialize();
   const signed = await wallet.signTransaction(tx);
   const signedMessage = signed.message.serialize();
@@ -90,27 +97,31 @@ async function executeSolSwap(args: {
   symbol: string;
   amountSol: number;
   slippageBps: number;
-  portfolioLimits: PortfolioLimits;
 }): Promise<{ signature: string; explorerUrl: string }> {
-  const { wallet, outputMint, symbol, amountSol, slippageBps, portfolioLimits } = args;
+  const { wallet, outputMint, symbol, amountSol, slippageBps } = args;
   if (!wallet.publicKey) throw new Error('Connect a Solana wallet that can sign transactions');
   const walletAddress = wallet.publicKey.toBase58();
   return withWalletTrade({ walletAddress, mint: outputMint, symbol, side: 'buy', amountSol }, async (attempt) => {
     await requireMintSafe(outputMint);
     if (!wallet.signTransaction) throw new Error('Connected wallet cannot sign transactions');
-    const portfolio = getPortfolioSnapshot(walletAddress, outputMint, undefined, undefined, attempt.id);
     const built = await fetchSolSwapTx({
       outputMint,
       amount: amountSol,
       slippageBps,
       userPublicKey: walletAddress,
       tradeId: attempt.id,
-      portfolio,
       confirm: true,
       mode: 'LIVE',
     });
-    return signSendBase64(wallet, built.swapTransaction, attempt, built.lastValidBlockHeight);
-  }, portfolioLimits);
+    return signSendBase64(wallet, built.swapTransaction, attempt, built.lastValidBlockHeight, {
+      inputMint: 'So11111111111111111111111111111111111111112',
+      outputMint,
+      inputAmount: built.inAmount || String(Math.round(amountSol * 1_000_000_000)),
+      quotedOutput: built.outAmount || '',
+      minimumOutput: built.otherAmountThreshold || '',
+      slippageBps: built.slippageBps || slippageBps,
+    });
+  });
 }
 
 export async function getTokenBalanceAtomic(
@@ -156,7 +167,14 @@ async function executeSolClose(args: {
       confirm: true,
       mode: 'LIVE',
     });
-    const sent = await signSendBase64(wallet, built.swapTransaction, attempt, built.lastValidBlockHeight);
+    const sent = await signSendBase64(wallet, built.swapTransaction, attempt, built.lastValidBlockHeight, {
+      inputMint,
+      outputMint: 'So11111111111111111111111111111111111111112',
+      inputAmount: built.inAmount || bal.amountAtomic,
+      quotedOutput: built.outAmount || '',
+      minimumOutput: built.otherAmountThreshold || '',
+      slippageBps: built.slippageBps || slippageBps,
+    });
     return { ...sent, amountAtomic: built.inAmount || bal.amountAtomic };
   });
 }
@@ -167,7 +185,6 @@ export async function paperSimulateSolSwap(args: {
   outputMint: string;
   amountSol: number;
   slippageBps: number;
-  portfolio: ReturnType<typeof getPortfolioSnapshot>;
 }): Promise<{
   ok: boolean;
   unitsConsumed?: number;
@@ -177,7 +194,7 @@ export async function paperSimulateSolSwap(args: {
   outAmount?: string;
   otherAmountThreshold?: string;
 }> {
-  const { userPublicKey, outputMint, amountSol, slippageBps, portfolio } = args;
+  const { userPublicKey, outputMint, amountSol, slippageBps } = args;
   await requireMintSafe(outputMint);
   const built = await fetchSolSwapTx({
     outputMint,
@@ -185,9 +202,8 @@ export async function paperSimulateSolSwap(args: {
     slippageBps,
     userPublicKey,
     tradeId: `paper-${crypto.randomUUID()}`,
-    portfolio,
     confirm: true,
-    mode: 'LIVE',
+    mode: 'PAPER',
   });
   const raw = Uint8Array.from(atob(built.swapTransaction), (c) => c.charCodeAt(0));
   const tx = VersionedTransaction.deserialize(raw);

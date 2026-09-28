@@ -12,19 +12,15 @@ import {
 } from '../api';
 import { isDemoTokenAddress } from '../data/mockData';
 import { hasLocalToken } from '../localToken';
-import { getPortfolioSnapshot, portfolioLimitBlocker, type PortfolioLimits, type TradeAttempt } from '../positions';
 import { DEFAULT_SLIPPAGE_BPS, MAX_SLIPPAGE_BPS } from '../solana/constants';
 import { paperSimulateSolSwap, signAndSendSolSwap } from '../solana/sendJupiterSwap';
-import type { Chain, Position, ScreenToken, TradeMode } from '../types';
+import type { Chain, ScreenToken, TradeMode } from '../types';
 
 interface Props {
   token: ScreenToken | null;
   amount: number;
   mode: TradeMode;
   chain: Chain;
-  positions: Position[];
-  tradeAttempts: TradeAttempt[];
-  portfolioLimits: PortfolioLimits;
   onReconcile: () => void;
   onClose: () => void;
   onConfirm: (token: ScreenToken, amount: number, meta?: LiveBuyMeta) => void;
@@ -49,7 +45,7 @@ const NATIVE_HINT: Record<string, string> = {
   ETH: 'ETH',
 };
 
-export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts, portfolioLimits, onReconcile, onClose, onConfirm }: Props) {
+export function BuyModal({ token, amount, mode, chain, onReconcile, onClose, onConfirm }: Props) {
   const wallet = useWallet();
   const { connection: _connection } = useConnection();
   void _connection;
@@ -214,23 +210,12 @@ export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts,
 
   const safetyOk = Boolean(mintSafety?.ok && mintSafety.mint === ca);
   const quoteCurrent = quoteKey === currentQuoteKey && !quoting;
-  const walletAddress = wallet.publicKey?.toBase58() || '';
-  const portfolioSnapshot = getPortfolioSnapshot(walletAddress, ca, positions, tradeAttempts);
-  const portfolioBlocker = portfolioLimitBlocker({
-    walletAddress,
-    mint: ca,
-    amountSol: nAmt,
-    limits: portfolioLimits,
-    positions,
-    attempts: tradeAttempts,
-  });
   const canSolSign =
     isSolLive &&
     !isPaper &&
     understand &&
     caOk &&
     !submitting &&
-    !portfolioBlocker &&
     !safetyLoading &&
     safetyOk && quoteCurrent && Boolean(solQuote?.ok) &&
     Boolean(wallet.publicKey) &&
@@ -244,7 +229,6 @@ export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts,
     understand &&
     caOk &&
     !submitting &&
-    !portfolioBlocker &&
     !safetyLoading &&
     safetyOk && quoteCurrent && Boolean(solQuote?.ok) &&
     Boolean(wallet.publicKey) &&
@@ -257,7 +241,6 @@ export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts,
     if (ca.length < 32 || isDemoTokenAddress(ca)) solBlockers.push('Enter the real token address');
     else if (caConfirm.trim() !== ca) solBlockers.push('Re-typed address does not match');
     if (!Number.isFinite(nAmt) || nAmt <= 0 || nAmt > maxNative) solBlockers.push(`Amount must be above 0 and at most ${maxNative} SOL`);
-    if (portfolioBlocker) solBlockers.push(portfolioBlocker);
     if (slippageBps < 1 || slippageBps > maxSlip) solBlockers.push(`Slippage must be 1 to ${maxSlip} bps`);
     if (!wallet.publicKey) solBlockers.push('Connect your wallet (button at top right)');
     if (!isPaper && !wallet.signTransaction) solBlockers.push('Connected wallet cannot sign transactions');
@@ -286,7 +269,6 @@ export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts,
         symbol: token.symbol,
         amountSol: Number(amt) || amount,
         slippageBps,
-        portfolioLimits,
       });
       setStatusMsg(`Confirmed: ${result.signature.slice(0, 12)}…`);
       onConfirm(token, Number(amt) || amount, {
@@ -316,7 +298,6 @@ export function BuyModal({ token, amount, mode, chain, positions, tradeAttempts,
         outputMint: tokenAddress.trim(),
         amountSol: Number(amt) || amount,
         slippageBps,
-        portfolio: portfolioSnapshot,
       });
       if (!sim.ok) {
         setQuoteErr(sim.err || 'Simulation failed');

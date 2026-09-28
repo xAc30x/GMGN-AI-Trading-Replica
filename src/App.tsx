@@ -15,12 +15,8 @@ import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
 import {
   loadLivePositions,
-  loadTradeAttempts,
   reconcileWalletTrades,
-  TRADE_JOURNAL_STORAGE_KEY,
   LIVE_POSITIONS_STORAGE_KEY,
-  type PortfolioLimits,
-  type TradeAttempt,
 } from './positions';
 import { fetchHealth } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
@@ -56,8 +52,6 @@ export default function App() {
   const [buyAmount, setBuyAmount] = useState(0.01);
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
   const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
-  const [tradeAttempts, setTradeAttempts] = useState<TradeAttempt[]>(loadTradeAttempts);
-  const [portfolioLimits, setPortfolioLimits] = useState<PortfolioLimits>({ maxPortfolioSol: 0.1, maxOpenPositions: 5 });
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
   const [buyToken, setBuyToken] = useState<ScreenToken | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -78,7 +72,6 @@ export default function App() {
     try {
       const walletAddress = wallet.publicKey.toBase58();
       const attempts = await reconcileWalletTrades(makeConnection(), walletAddress);
-      setTradeAttempts(attempts);
       setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
       const unresolved = attempts.filter(attempt => attempt.walletAddress === walletAddress &&
         (attempt.status === 'submitted' || attempt.status === 'unknown'));
@@ -102,19 +95,14 @@ export default function App() {
     void fetchHealth()
       .then((h) => {
         setLiveReady(h.liveReady);
-        setPortfolioLimits({
-          maxPortfolioSol: h.maxPortfolioSol ?? 0.1,
-          maxOpenPositions: h.maxOpenPositions ?? 5,
-        });
       })
       .catch(() => setLiveReady(false));
   }, []);
 
   useEffect(() => {
     const syncStoredTrades = (event: StorageEvent) => {
-      if (event.key && event.key !== LIVE_POSITIONS_STORAGE_KEY && event.key !== TRADE_JOURNAL_STORAGE_KEY) return;
+      if (event.key && event.key !== LIVE_POSITIONS_STORAGE_KEY) return;
       setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
-      setTradeAttempts(loadTradeAttempts());
     };
     window.addEventListener('storage', syncStoredTrades);
     return () => window.removeEventListener('storage', syncStoredTrades);
@@ -259,7 +247,6 @@ export default function App() {
         'live',
         `SOL wallet swap: ${token.symbol} · ${amount} SOL · tx ${meta.hash?.slice(0, 10) || '?'}…`,
       );
-      setTradeAttempts(loadTradeAttempts());
       setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
       showToast(meta.hash ? `Wallet swap landed · ${meta.hash.slice(0, 12)}…` : 'Wallet swap submitted');
       window.setTimeout(() => setBuyToken(null), 1200);
@@ -317,7 +304,6 @@ export default function App() {
           percent: 100,
           slippageBps: 100,
         });
-        setTradeAttempts(loadTradeAttempts());
         setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         appendLog(
           'SELL',
@@ -326,7 +312,6 @@ export default function App() {
         );
         showToast(`Closed · ${res.signature.slice(0, 12)}…`);
       } catch (e) {
-        setTradeAttempts(loadTradeAttempts());
         setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         void reconcileTrades();
         showToast(e instanceof Error ? e.message : 'SOL close failed');
@@ -430,9 +415,6 @@ export default function App() {
         amount={buyAmount}
         mode={mode}
         chain={chain}
-        positions={positions}
-        tradeAttempts={tradeAttempts}
-        portfolioLimits={portfolioLimits}
         onReconcile={() => { void reconcileTrades(); }}
         onClose={() => setBuyToken(null)}
         onConfirm={handleBuyConfirm}

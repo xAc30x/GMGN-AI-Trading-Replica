@@ -31,9 +31,8 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 ```bash
 cd /home/gptanonymous/gmgn-ai-trader-replica
 npm install
-export GMGN_LIVE=1
-# GMGN_SOL_BROADCAST stays unset; PAPER quotes/simulations do not need broadcast permission.
-export GMGN_MAX_NATIVE_AMOUNT=0.05
+# Keep both actual-service execution gates disabled.
+unset GMGN_LIVE GMGN_SOL_BROADCAST
 npm run dev:all
 ```
 
@@ -41,9 +40,8 @@ Open http://127.0.0.1:5173/
 
 1. Paste `GMGN_LOCAL_TOKEN` from `server/.env` into **Credentials**
 2. Connect **Phantom** or **Solflare**
-3. Keep SOL broadcast disabled while testing PAPER. SOL LIVE also requires the separate
-  `GMGN_SOL_BROADCAST=1` server opt-in; do not set it until live execution is separately authorized.
-4. For PAPER, enter a real mint and simulate it. Do not set `GMGN_SOL_BROADCAST` or enter SOL LIVE during this setup.
+3. Keep both execution gates unset. LIVE/PAPER service routes remain disabled in this setup.
+   Automated tests use isolated loopback fixtures that never submit a real trade.
 
 Optional: set `VITE_SOLANA_RPC_URL` to a dedicated RPC (Helius / QuickNode). Public mainnet RPC is fine for smoke tests, flaky for production.
 
@@ -96,7 +94,7 @@ Wallet signing removes hot-key custody from this app. You can still lose money t
 
 ## Audit defect fixes
 
-Requires Node 22.12+. Client regression tests use the project's TypeScript compiler.
+Requires Node 22.13+ for the built-in SQLite reservation ledger. Client regression tests use the project's TypeScript compiler.
 Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm run lint.
 
 - Transaction builds obtain a fresh server-owned ExactIn quote. Caller quotes are ignored.
@@ -113,24 +111,39 @@ Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm 
   and are checked again when that wallet reconnects. Inspect unknown signatures before retrying.
 - Web Locks serialize wallet actions across tabs. A persisted trade ID and signed-payload hash
   make RPC retries idempotent; a reused ID with different bytes is rejected.
-- Live records are stored in this browser and separated by wallet + chain + mint.
-  Exposure uses tracked SOL cost, not current market value or exact token accounting.
-  Close still explicitly sells the connected wallet's entire mint balance.
-  Switching wallets cannot close another wallet's tracked record. PAPER/SHADOW cannot erase live records.
-- Buys check tracked exposure and open-mint limits in the UI, again under the wallet lock,
-  and at the server swap-build route. These are local-app guardrails, not chain-authoritative limits.
+- Before wallet approval, the browser independently decodes the unsigned v0 message,
+  resolves every address lookup table, checks wallet authority and trade-mint accounts,
+  accepts only the supported Jupiter Route exact-in instruction (up to five known
+  route steps) and approved setup programs,
+  matches exact amounts/slippage/minimum output, and bounds network/platform fees.
+  Unexpected transfers and unsupported instructions fail closed.
+- Buy limits are computed by the server from fresh SPL Token and Token-2022 balances,
+  valued as the sum of fresh Jupiter ExactIn minimum-output SOL quotes. Pending buy
+  amounts are reserved atomically in a durable server ledger before Jupiter builds.
+  Request-supplied portfolio figures are ignored. Stale RPC slots, unavailable balances,
+  invalid quotes, ledger errors, and uncertain signatures block or retain capacity.
+- Close amount is bounded by the connected wallet's chain-reconciled mint balance.
+  Browser-held position records are display/history only, never buy-limit authority.
+- The reservation ledger is SQLite with durable `BEGIN IMMEDIATE` transactions and
+  mode-600 database permissions. RPC/quote work runs outside the write transaction;
+  the final limit check and reservation commit are atomic across processes sharing the
+  same local database. Existing default JSON reservations migrate once and the source
+  file is retained. Keep the database on persistent local storage: SQLite is not a
+  distributed ledger and network filesystems or separate backend hosts are unsupported.
 - LIVE/PAPER hide mock metrics. Wallet analysis and the copy calculator are labeled illustrative.
 
-Tests use mocked providers and loopback-only HTTP fixtures. The end-to-end test signs a fixture
-transaction with an ephemeral key and sends it only to the controlled local RPC; it never reaches a chain.
-Importing the Express app does not start a server or generate/remove credentials.
+Server tests use mocked providers and loopback-only HTTP fixtures. Browser tests run the actual
+React trading flow in Chromium with an isolated injected mock wallet and intercepted API/RPC
+fixtures; they never connect to or submit transactions to a blockchain. Run them with
+`npm run test:browser`. Importing the Express app does not start a server or generate/remove credentials.
 
-Remaining boundaries: Jupiter and the selected RPC are trusted providers; transaction instructions
-are not independently decoded as a full swap policy. Wallet approval remains mandatory.
-Browser-held positions are not reconciled to token quantities or live market value, and browser
-storage is not shared across devices. The server ledger records broadcast idempotency, not a complete
-portfolio/accounting ledger. Strategy validation and automated exits are not implemented. Close
-safety gates and the close-size bound remain in force.
+This is not production-ready. Jupiter and the selected RPC remain trusted for route construction,
+balances, fees, and quote data; the client supports only its explicitly decoded Jupiter Route
+instruction variant and rejects other variants. The file-backed ledger is suitable only for a
+single shared backend filesystem, not horizontally scaled or multi-host deployment. Wallet approval
+remains mandatory. Strategy validation, audited deployment controls, distributed accounting, and
+automated exits are not implemented. No trade should be submitted against real services until those
+boundaries are separately reviewed and authorized.
 
 ### Private production deployment
 

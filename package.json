@@ -12,6 +12,7 @@
     "dev:all": "concurrently -k -n web,api -c lime,cyan \"npm run dev -- --host 127.0.0.1 --port 5173\" \"npm run server\"",
     "test": "node --test server/tests/*.test.js",
     "test:money": "node --test server/tests/moneyPath.test.js",
+    "test:broadcast-safety": "node --test server/tests/broadcastSafety.test.js",
     "test:browser": "playwright test"
   },
   "dependencies": {

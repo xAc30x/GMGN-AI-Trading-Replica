@@ -98,6 +98,12 @@ Wallet signing removes hot-key custody from this app. You can still lose money t
 Requires Node 22.13+ for the built-in SQLite reservation ledger. Client regression tests use the project's TypeScript compiler.
 Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm run lint.
 
+Broadcast-boundary acceptance checks run with `npm run test:broadcast-safety`
+and are also included in `npm test`. The September 29 validation baseline has
+10 failing safety cases; these are release blockers, not skipped tests. See
+[the validation record](docs/validation/broadcast-boundary-2026-09-29.md) for
+fixture isolation, reproduction commands, results, and remaining limits.
+
 - Transaction builds obtain a fresh server-owned ExactIn quote. Caller quotes are ignored.
   Mints, exact input amount, slippage, minimum output and price impact are validated.
   Preview prices can change; review the final transaction in your wallet.

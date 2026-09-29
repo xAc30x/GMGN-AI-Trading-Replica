@@ -57,6 +57,7 @@ const close = server => new Promise(resolve => {
 
 describe('broadcast-boundary safety acceptance — isolated fixtures only', { concurrency: false }, () => {
   let directory, fixture, application, wallet, tradeId, sequence = 0;
+  let blockHeight = 1, responseKind = 'normal';
   let sends = [], fixtureErrors = [], deniedConnections = [], loseNextResponse = false;
   const savedEnv = new Map();
   const allowedPorts = new Set();
@@ -97,9 +98,11 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
           let result;
           if (rpc.method === 'sendTransaction') {
             const tx = decode(rpc.params[0]);
-            sends.push({ signature: bs58.encode(tx.signatures[0]), payload: rpc.params[0] });
+            sends.push({ signature: bs58.encode(tx.signatures[0]), payload: rpc.params[0], options: rpc.params[1] });
+            if (responseKind === 'malformed') { res.end('invalid-json'); return; }
+            if (responseKind === 'error') return send({ jsonrpc: '2.0', id: rpc.id, error: { code: -32000, message: 'fixture error' } });
             if (loseNextResponse) { loseNextResponse = false; req.socket.destroy(); return; }
-            result = bs58.encode(tx.signatures[0]);
+            result = responseKind === 'mismatch' ? bs58.encode(new Uint8Array(64).fill(1)) : bs58.encode(tx.signatures[0]);
           } else if (rpc.method === 'getAccountInfo') {
             result = { context: { slot: 1 }, value: {
               data: { program: 'spl-token', parsed: { type: 'mint', info: {
@@ -108,8 +111,15 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
               executable: false, lamports: 1, owner: SPL.toBase58(), rentEpoch: 0,
             } };
           } else if (rpc.method === 'getTokenAccountsByOwner') {
-            result = { context: { slot: 1 }, value: [] };
-          } else if (['getSlot', 'getBlockHeight'].includes(rpc.method)) result = 1;
+            result = { context: { slot: 1 }, value: rpc.params[1].mint ? [{
+              pubkey: SOL, account: { executable: false, lamports: 1, owner: SPL.toBase58(), rentEpoch: 0,
+                data: { program: 'spl-token', space: 165, parsed: { type: 'account', info: {
+                  mint: MINT, owner: wallet.publicKey.toBase58(),
+                  tokenAmount: { amount: '10000', decimals: 6, uiAmount: 0.01, uiAmountString: '0.01' },
+                } } } },
+            }] : [] };
+          } else if (rpc.method === 'getSlot') result = 1;
+          else if (rpc.method === 'getBlockHeight') result = blockHeight;
           else if (rpc.method === 'getSignatureStatuses') {
             result = { context: { slot: 1 }, value: rpc.params[0].map(() => null) };
           } else throw new Error(`Unexpected fixture RPC method: ${rpc.method}`);
@@ -173,6 +183,8 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     wallet = Keypair.generate();
     tradeId = `broadcast-safety-${id}-original`;
     sends = [];
+    blockHeight = 1;
+    responseKind = 'normal';
     loseNextResponse = false;
   });
 
@@ -335,4 +347,64 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     await build('LIVE', replayId);
     assertRejectedWithoutSend(await broadcast(payload, replayId), 1);
   });
+  test('an authorized close forwards once and its retry is cached', async () => {
+    const built = await request('/api/sol/close-tx', { inputMint: MINT, amountAtomic: '100',
+      slippageBps: 100, userPublicKey: wallet.publicKey.toBase58(), tradeId, confirm: true, mode: 'LIVE' });
+    assert.equal(built.status, 200, JSON.stringify(built));
+    const payload = sign(built.body);
+    const first = await broadcast(payload);
+    assert.equal(first.status, 200);
+    assert.deepEqual(await broadcast(payload), first);
+    assert.equal(sends.length, 1);
+  });
+  test('a changed close message never reaches upstream', async () => {
+    const built = await request('/api/sol/close-tx', { inputMint: MINT, amountAtomic: '100',
+      slippageBps: 100, userPublicKey: wallet.publicKey.toBase58(), tradeId, confirm: true, mode: 'LIVE' });
+    assert.equal(built.status, 200);
+    assertRejectedWithoutSend(await broadcast(sign(built.body, message => {
+      message.instructions[0].data.writeBigUInt64LE(101n, 16);
+    })));
+  });
+  test('expired authorization rejects before dispatch', async () => {
+    const payload = sign(await build());
+    blockHeight = 101;
+    assertRejectedWithoutSend(await broadcast(payload));
+  });
+  test('missing buy reservation rejects even with a valid message authorization', async () => {
+    const payload = sign(await build());
+    const { releasePortfolioReservation } = await import('../portfolioLedger.js');
+    await releasePortfolioReservation(tradeId);
+    assertRejectedWithoutSend(await broadcast(payload));
+  });
+  for (const kind of ['mismatch', 'malformed', 'error']) {
+    test(`RPC ${kind} response retains the claim and blocks re-dispatch`, async () => {
+      const payload = sign(await build());
+      responseKind = kind;
+      assert.equal((await broadcast(payload)).status, 502);
+      assert.equal(sends.length, 1);
+      responseKind = 'normal';
+      assertRejectedWithoutSend(await broadcast(payload), 1);
+    });
+  }
+  test('concurrent HTTP submissions dispatch at most once', async () => {
+    const payload = sign(await build());
+    const responses = await Promise.all(Array.from({ length: 4 }, () => broadcast(payload)));
+    assert.ok(responses.some(r => r.status === 200));
+    assert.ok(responses.every(r => [200, 409].includes(r.status)));
+    assert.equal(sends.length, 1);
+  });
+  test('caller RPC options cannot bypass preflight or trigger upstream retries', async () => {
+    const payload = sign(await build());
+    const response = await request('/api/sol/rpc', { jsonrpc: '2.0', id: 1, method: 'sendTransaction',
+      params: [payload, { encoding: 'base64', skipPreflight: true, maxRetries: 100 }] });
+    assert.equal(response.status, 200);
+    assert.deepEqual(sends[0].options, { encoding: 'base64', skipPreflight: false, maxRetries: 0 });
+  });
+  test('corrupt authorization storage fails closed before dispatch', async () => {
+    const payload = sign(await build());
+    fs.writeFileSync(`${process.env.GMGN_TRADE_LEDGER_PATH}.sqlite`, 'broken database');
+    assert.equal((await broadcast(payload)).status, 503);
+    assert.equal(sends.length, 0);
+  });
+
 });

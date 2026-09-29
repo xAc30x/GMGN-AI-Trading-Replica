@@ -1,8 +1,53 @@
 # Broadcast-boundary validation — 2026-09-29
 
-Status: **FAIL — live trading remains blocked.** This change adds acceptance
-tests, not an execution fix. Keep this work in draft until the failures are
-resolved. No production/runtime flags or credentials were changed.
+Current status: **PASS for transaction binding and replay acceptance; no live
+trading clearance.** The follow-up implementation described below resolves the
+10 original failures. The original baseline findings are preserved afterward.
+No production/runtime flags or credentials were changed.
+
+## Remediation follow-up
+
+Implemented on the PR #5 validation branch, based on commit
+`fa245f866906bef6eda313a925a46cf8e74f3a67`:
+
+- Immutable authorizations bind each LIVE build's exact message, wallet, quote
+  intent and expiry to its trade ID. Both buy and close paths authorize; PAPER does not.
+- Broadcast checks the cryptographic signature and message identity, obtains a
+  fresh block height, and atomically claims the signature before network dispatch.
+- SQLite message/signature uniqueness and `BEGIN IMMEDIATE` serialize claims
+  across processes. Pending claims survive restart and never automatically replay.
+- Buys require a matching active reservation before sending. Caller-supplied RPC
+  options cannot disable preflight or enable retries. Unexpected upstream results
+  remain uncertain; only the exact expected signature can enter the accepted cache.
+- Legacy JSON IDs, signed-payload hashes, and known signatures migrate once as
+  blocking tombstones, without deleting the original JSON.
+
+Validation with Node 24.19.0:
+
+| Check | Follow-up result |
+| --- | --- |
+| HTTP broadcast-boundary suite | 27 passed, including all original 17 tests |
+| Durable ledger suite | 5 passed, including independent-process race and restart |
+| Full `npm test` | 105 passed, 0 failed, 0 skipped |
+| Production build | Passed; existing bundle-size warning |
+| Lint | Zero errors; six existing React warnings |
+| Whitespace check | Passed |
+
+Two older route fixtures were corrected: placeholder unsigned strings now use
+serialized transactions, and successful broadcast fixtures create a LIVE
+authorization and return the real test signature. Their assertions remain in
+place. None of the original 10 rejection assertions were weakened or skipped.
+
+`npm run test:broadcast-safety` runs both the HTTP and durable-ledger suites.
+Browser tests were not revalidated in this follow-up: Chromium installation was
+blocked in the preceding audit. No real provider transaction or deployment was
+performed. Message binding prevents changes after the server build; it does not
+prove the original provider message implements the quote, solve every Jupiter
+account-schema issue, or establish profitability. Separate database transactions
+fail closed across crash boundaries but are not a distributed atomic commit.
+
+The sections below record the **historical failing baseline**, not the current
+test outcome.
 
 ## Baseline and scope
 

@@ -8,11 +8,9 @@ import { envNumber } from './config.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
-import bs58 from 'bs58';
-import { Connection, VersionedTransaction } from '@solana/web3.js';
+import { Connection } from '@solana/web3.js';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
-import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +32,7 @@ import { registerResearchRoutes } from './researchRoutes.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
-import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
+import { assertTradeId, authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
   getWalletMintBalance,
@@ -785,64 +783,50 @@ app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
     return res.status(400).json({ jsonrpc: '2.0', id: req.body?.id ?? null, error: { code: -32601, message: reject } });
   }
   let tradeId;
+  let claim;
+  let params = req.body.params ?? [];
   if (req.body.method === 'sendTransaction') {
     tradeId = req.get('x-gmgn-trade-id');
-    const signedTransaction = req.body.params?.[0];
-    const claim = claimBroadcast(tradeId, signedTransaction);
-    if (claim.kind === 'invalid') {
-      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: claim.error } });
-    }
-    if (claim.kind === 'cached') {
-      return res.json({ jsonrpc: '2.0', id: req.body.id ?? 1, result: claim.signature });
-    }
-    if (claim.kind !== 'claimed') {
-      const message = claim.kind === 'conflict'
-        ? 'Trade ID was already used for a different signed transaction'
-        : 'Trade ID is pending or has a prior uncertain result; reconcile before retrying';
-      return res.status(409).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32009, message } });
-    }
     try {
-      const transaction = VersionedTransaction.deserialize(Buffer.from(signedTransaction, 'base64'));
-      const requiredSignatures = transaction.message.header.numRequiredSignatures;
-      const messageBytes = transaction.message.serialize();
-      const validSignatures = transaction.signatures.length === requiredSignatures &&
-        transaction.signatures.slice(0, requiredSignatures).every((signature, index) => {
-          if (!signature || signature.every((byte) => byte === 0)) return false;
-          const rawKey = transaction.message.staticAccountKeys[index].toBuffer();
-          const publicKey = createPublicKey({
-            key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), rawKey]),
-            format: 'der',
-            type: 'spki',
-          });
-          return verifySignature(null, messageBytes, publicKey, signature);
-        });
-      const signature = transaction.signatures[0];
-      if (!validSignatures) {
-        completeBroadcast(tradeId, { failed: true });
-        return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: 'Signed transaction signature is invalid' } });
+      const candidate = inspectBroadcast(tradeId, req.body.params?.[0]);
+      if (candidate.kind === 'cached') {
+        return res.json({ jsonrpc: '2.0', id: req.body.id ?? 1, result: candidate.signature });
       }
-      await markPortfolioReservationSubmitted(tradeId, bs58.encode(signature));
+      const height = await portfolioConnection.getBlockHeight('confirmed');
+      claim = claimBroadcast(candidate, height);
+      if (claim.kind === 'cached') {
+        return res.json({ jsonrpc: '2.0', id: req.body.id ?? 1, result: claim.signature });
+      }
+      if (claim.side === 'buy') {
+        await markPortfolioReservationSubmitted(tradeId, claim.signature, {
+          walletAddress: claim.wallet, mint: claim.intent.outputMint,
+          amountLamports: claim.intent.inAmount, currentBlockHeight: height,
+        });
+      }
+      // Callers cannot turn off preflight or request uncontrolled RPC retries.
+      params = [req.body.params[0], { encoding: 'base64', skipPreflight: false, maxRetries: 0 }];
     } catch (error) {
-      completeBroadcast(tradeId, { failed: true });
-      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: `Invalid signed transaction: ${error.message}` } });
+      // A durable claim remains pending after any post-claim failure.
+      return res.status(error.status || 503).json({ jsonrpc: '2.0', id: req.body.id ?? null,
+        error: { code: -32009, message: error.message } });
     }
   }
   try {
     const upstream = await fetch(SOLANA_RPC_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: req.body.id ?? 1, method: req.body.method, params: req.body.params ?? [] }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: req.body.id ?? 1, method: req.body.method, params }),
       signal: AbortSignal.timeout(20_000),
     });
     const text = await upstream.text();
     if (tradeId) {
-      try {
-        const result = JSON.parse(text);
-        if (result.error) completeBroadcast(tradeId, { failed: true });
-        else if (upstream.ok && typeof result.result === 'string') {
-          completeBroadcast(tradeId, { signature: result.result });
-        }
-      } catch { /* retain pending state when the RPC response is ambiguous */ }
+      let result;
+      try { result = JSON.parse(text); } catch { /* unknown response retains pending claim */ }
+      if (!upstream.ok || result?.error || result?.result !== claim.signature) {
+        return res.status(502).json({ jsonrpc: '2.0', id: req.body.id ?? null,
+          error: { code: -32000, message: 'RPC result uncertain or signature mismatch; reconcile before retrying' } });
+      }
+      completeBroadcast(tradeId, claim.signature);
     }
     res.status(upstream.status).type('application/json').send(text);
   } catch (e) {
@@ -943,6 +927,7 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     }
     const outputMint = assertOutputToken('sol', body.outputMint || body.outputToken);
     const tradeId = String(body.tradeId || '');
+    if (body.mode === 'LIVE') assertTradeId(tradeId);
     const slippageBps = clampSlippageBps(body.slippageBps);
     let lamports;
     if (body.amountLamports != null && body.amountLamports !== '') {
@@ -987,6 +972,8 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     }
     if (reservationId) {
       await finishPortfolioReservation(tradeId, swap.lastValidBlockHeight);
+      authorizeBroadcast({ tradeId, swapTransaction: swap.swapTransaction, walletAddress: userPublicKey,
+        side: 'buy', mode: 'LIVE', lastValidBlockHeight: swap.lastValidBlockHeight, intent: quote });
       reservationKept = true;
     }
     res.json({
@@ -1026,6 +1013,8 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
         error: 'SOL close-tx rejected: confirm must be true and mode must be LIVE',
       });
     }
+    const tradeId = String(body.tradeId || '');
+    assertTradeId(tradeId);
     const userPublicKey = String(body.userPublicKey || '').trim();
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(userPublicKey)) {
       return res.status(400).json({ ok: false, error: 'userPublicKey required (base58)' });
@@ -1083,6 +1072,8 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
     if (!swap.swapTransaction) {
       return res.status(502).json({ ok: false, error: 'Jupiter did not return swapTransaction' });
     }
+    authorizeBroadcast({ tradeId, swapTransaction: swap.swapTransaction, walletAddress: userPublicKey,
+      side: 'close', mode: 'LIVE', lastValidBlockHeight: swap.lastValidBlockHeight, intent: quote });
     res.json({
       ok: true,
       chain: 'sol',

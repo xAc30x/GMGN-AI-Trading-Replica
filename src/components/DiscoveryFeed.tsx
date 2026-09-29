@@ -47,11 +47,11 @@ function toBuyToken(t: DiscoveredToken): ScreenToken {
     devScore: t.safety.score != null ? Math.max(0, 100 - t.safety.score) : 0,
     devLabel: ok ? 'GOOD' : 'BAD',
     timing: `liq ${usd(t.liquidityUsd)}`,
-    llm: ok ? 'PASS' : 'FAIL',
-    priority: ok ? 70 : 0,
-    decision: ok ? 'buy' : 'blocked',
+    llm: ok ? 'HOLD' : 'FAIL',
+    priority: t.ranking?.score ?? 0,
+    decision: !ok ? 'blocked' : t.ranking?.action === 'candidate' ? 'buy' : 'watch',
     thesis: ok
-      ? `DexScreener feed token passed on-chain + RugCheck/GoPlus gates · liq ${usd(t.liquidityUsd)} · vol24h ${usd(t.volume24hUsd)}.`
+      ? `${t.ranking?.version || 'Safety only'}: ${t.ranking?.reasons.join(' · ') || 'No opportunity score available'} · liq ${usd(t.liquidityUsd)}.`
       : `Blocked: ${blocker || 'failed safety'}`,
   };
 }
@@ -143,14 +143,15 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
               <th>24h</th>
               <th>Buys/Sells 1h</th>
               <th>Safety</th>
-              <th>Decision</th>
+              <th>Opportunity</th>
+              <th>Manual action</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10}>
+                <td colSpan={11}>
                   <div className="help">{loading ? 'Scanning feed…' : 'No tokens right now.'}</div>
                 </td>
               </tr>
@@ -170,11 +171,15 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
                 <td>{usd(t.volume24hUsd)}</td>
                 <td>{pct(t.change1hPct)}</td>
                 <td>{pct(t.change24hPct)}</td>
-                <td>{t.buys1h}/{t.sells1h}</td>
+                <td>{t.buys1h ?? '—'}/{t.sells1h ?? '—'}</td>
                 <td className={t.safety.ok ? 'safe-ok' : 'safe-bad'} title={[...t.safety.blockers, ...t.safety.warnings].join('\n')}>
                   {t.safety.ok
                     ? t.safety.score != null ? `✓ risk ${t.safety.score}` : "✓ pass"
                     : `✗ ${(t.safety.blockers[0] || 'blocked').slice(0, 36)}`}
+                </td>
+                <td title={t.ranking?.reasons.join(' · ')}>
+                  {t.ranking ? `${t.ranking.action} · ${t.ranking.score ?? '—'}/100` : 'Unranked'}
+                  <div className="meta">Rules-based · unvalidated</div>
                 </td>
                 <td>
                   {t.safety.ok ? (

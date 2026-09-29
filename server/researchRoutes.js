@@ -1,9 +1,12 @@
 import { scanHistory, collectOutcomes } from './researchStore.js';
 import { createPaperEngine, paperPortfolio } from './paperTrading.js';
 import { marketPricesUsd } from './discovery.js';
+import { createResearchAutomation, automationStatus, updateResearchSettings } from './researchAutomation.js';
 
-export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount, enabled }) {
+export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount, enabled, scanDiscovery }) {
   const engine = createPaperEngine({ maxAmount });
+  const automation = createResearchAutomation({ scan: scanDiscovery, enabled, maxAmount });
+  let schedulerError = null;
   let running = null;
   let lastRun = 0;
   let workerError = null;
@@ -12,9 +15,8 @@ export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag
     if (Date.now() - lastRun < 15000) return;
     running = (async () => {
       try {
-        await engine.refresh();
-        await collectOutcomes(marketPricesUsd);
-        workerError = null;
+        const results = await Promise.allSettled([engine.refresh(), automation.refreshPortfolios(), collectOutcomes(marketPricesUsd)]);
+        workerError = results.filter(r => r.status === 'rejected').map(r => r.reason.message).join('; ') || null;
       } catch (e) { workerError = e.message; }
       finally { lastRun = Date.now(); running = null; }
     })();
@@ -36,7 +38,8 @@ export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag
   app.get('/api/paper/portfolio', requireLocalToken, route(() => ({ ...paperPortfolio(), workerError, monitoringEnabled: enabled() })));
   app.post('/api/paper/open', requireLocalToken, requireLiveFlag, route(async req => {
     const mint = assertOutputToken('sol', req.body?.mint);
-    return { position: await engine.open({ ...req.body, mint }) };
+    const { id, symbol, amount, slippageBps } = req.body;
+    return { position: await engine.open({ id, symbol, amount, slippageBps, mint }) };
   }));
   app.post('/api/paper/close', requireLocalToken, requireLiveFlag, route(async req => {
     if (typeof req.body?.id !== 'string') throw Object.assign(new Error('Paper position id required'), { status: 400 });
@@ -46,9 +49,20 @@ export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag
     await refresh();
     return { ...paperPortfolio(), workerError, monitoringEnabled: enabled() };
   }));
-  // Only the executable server starts the monitor. Tests/imports never start timers.
+  app.get('/api/research/automation', requireLocalToken, route(() => ({
+    ...automationStatus(), serviceEnabled: enabled(), schedulerError, monitorError: workerError,
+  })));
+  // Pause remains available even when the market-data service is disabled.
+  app.post('/api/research/automation', requireLocalToken, route(req => ({
+    settings: updateResearchSettings(req.body), serviceEnabled: enabled(),
+  })));
+  // Separate loops: discovery backoff or slow screening cannot stop paper exits.
   return function startResearchMonitor() {
-    const tick = () => { if (enabled()) void refresh(); };
+    const tick = () => {
+      if (!enabled()) return;
+      void refresh();
+      void automation.tick().then(() => { schedulerError = null; }).catch(e => { schedulerError = e.message; });
+    };
     const timer = setInterval(tick, 15000);
     timer.unref(); tick();
     return () => clearInterval(timer);

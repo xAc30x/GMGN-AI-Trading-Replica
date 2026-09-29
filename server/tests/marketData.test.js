@@ -97,6 +97,14 @@ test('market routes enforce auth/service gate, bound requests, screen discoverie
     assert.equal((await request('/api/paper/' + route, {})).status, 403);
   }
   assert.equal((await request('/api/paper/portfolio')).status, 200);
+  assert.equal((await request('/api/research/automation', undefined, 'wrong')).status, 401);
+  assert.equal((await request('/api/research/automation', { autoPaper: true }, 'wrong')).status, 401);
+  assert.equal((await request('/api/research/automation', { broadcast: true })).status, 400);
+  const automation = await request('/api/research/automation');
+  assert.equal(automation.body.settings.autoPaper, false);
+  assert.equal(automation.body.accounts.length, 2);
+  assert.equal((await request('/api/research/automation', { scanning: false })).body.settings.scanning, false);
+  assert.equal((await request('/api/research/automation')).body.serviceEnabled, false);
   process.env.GMGN_LIVE = '1';
   assert.equal((await request('/api/paper/open', { id: 'paper-request-0001', mint, amount: 0.01 })).status, 400);
   assert.equal((await request('/api/paper/portfolio')).body.stats.open, 0);

@@ -32,8 +32,30 @@ export function withResearch(fn) {
       INSERT OR IGNORE INTO paper_account VALUES (1, '1000000000', '1000000000');
       CREATE TABLE IF NOT EXISTS paper_positions (
         id TEXT PRIMARY KEY, mint TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, data TEXT NOT NULL);
-      CREATE UNIQUE INDEX IF NOT EXISTS paper_open_mint ON paper_positions(mint) WHERE state='open';
       CREATE TABLE IF NOT EXISTS paper_events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, position_id TEXT, kind TEXT NOT NULL, data TEXT NOT NULL);
+    `);
+    // Add account scopes without discarding the existing manual portfolio.
+    if (db.prepare('PRAGMA user_version').get().user_version < 2) {
+      transaction(db, () => {
+        if (!db.prepare('PRAGMA table_info(paper_positions)').all().some(c => c.name === 'account_id')) {
+          db.exec("ALTER TABLE paper_positions ADD COLUMN account_id TEXT NOT NULL DEFAULT 'manual'");
+        }
+        if (!db.prepare('PRAGMA table_info(paper_events)').all().some(c => c.name === 'account_id')) {
+          db.exec("ALTER TABLE paper_events ADD COLUMN account_id TEXT NOT NULL DEFAULT 'manual'");
+        }
+        db.exec(`DROP INDEX IF EXISTS paper_open_mint;
+          CREATE UNIQUE INDEX IF NOT EXISTS paper_open_account_mint ON paper_positions(account_id, mint) WHERE state='open';
+          PRAGMA user_version=2;`);
+      });
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS experiment_accounts (id TEXT PRIMARY KEY, initial TEXT NOT NULL, cash TEXT NOT NULL, started_at INTEGER NOT NULL, manifest TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS research_settings (id INTEGER PRIMARY KEY CHECK(id=1), scanning INTEGER NOT NULL, auto_paper INTEGER NOT NULL);
+      INSERT OR IGNORE INTO research_settings VALUES (1, 1, 0);
+      CREATE TABLE IF NOT EXISTS research_jobs (source TEXT PRIMARY KEY, next_at INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, owner TEXT, failures INTEGER NOT NULL DEFAULT 0, last_at INTEGER, last_scan_id TEXT, last_error TEXT);
+      CREATE TABLE IF NOT EXISTS strategy_decisions (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, scan_id TEXT NOT NULL, at INTEGER NOT NULL, mint TEXT, status TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS experiment_equity (id INTEGER PRIMARY KEY, account_id TEXT NOT NULL, at INTEGER NOT NULL, equity TEXT);
+      CREATE INDEX IF NOT EXISTS experiment_equity_account ON experiment_equity(account_id, at);
     `);
     return fn(db);
   } finally { db.close(); }
@@ -53,7 +75,7 @@ export function recordScan(source, tokens, at = Date.now()) {
       const id = randomUUID();
       const decision = token.safety.ok ? 'eligible' : 'blocked';
       db.prepare('INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, scanId, token.mint, at, decision, JSON.stringify({ ...token, strategyVersion: 'safety-only-v1' }));
+        .run(id, scanId, token.mint, at, decision, JSON.stringify({ ...token, strategyVersion: token.ranking?.version || 'safety-only-v1' }));
       for (const horizon of HORIZONS) {
         const valid = Number.isFinite(token.priceUsd) && token.priceUsd > 0;
         db.prepare('INSERT INTO outcomes (observation_id, horizon, due, status, error) VALUES (?, ?, ?, ?, ?)')

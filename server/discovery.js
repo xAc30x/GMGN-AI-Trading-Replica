@@ -68,11 +68,14 @@ export function summarizePairs(pairs, addresses, now = Date.now()) {
         priceUsd: positive(p.priceUsd) || null,
         liquidityUsd: liq,
         volume24hUsd: positive(p?.volume?.h24),
+        volume5mUsd: finite(p?.volume?.m5),
+        volume1hUsd: finite(p?.volume?.h1),
+        change5mPct: finite(p?.priceChange?.m5),
         change1hPct: finite(p?.priceChange?.h1),
         change24hPct: finite(p?.priceChange?.h24),
         marketCapUsd: positive(p.marketCap ?? p.fdv) || null,
-        buys1h: positive(p?.txns?.h1?.buys),
-        sells1h: positive(p?.txns?.h1?.sells),
+        buys1h: finite(p?.txns?.h1?.buys),
+        sells1h: finite(p?.txns?.h1?.sells),
         ageMinutes: positive(p.pairCreatedAt) ? Math.max(0, Math.round((now - Number(p.pairCreatedAt)) / 60000)) : null,
       });
     }

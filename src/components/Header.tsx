@@ -37,7 +37,7 @@ export function Header({
         <div>
           <h1>AI TRADER // Screen + One-Click Trade</h1>
           <p>
-            v0.0.1 · Safety watchlist + wallet-approved swaps · AI ranking is not implemented
+            v0.0.1 · Rules-based research + paper comparison · wallet-approved live swaps
           </p>
         </div>
       </div>

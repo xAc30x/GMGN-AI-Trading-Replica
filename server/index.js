@@ -31,6 +31,7 @@ import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
+import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
 import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
@@ -1105,9 +1106,10 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 
 
 
-registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken });
+const scanDiscovery = createDiscoveryScanner({ assertMint: mint => assertOutputToken('sol', mint) });
+registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken, scanDiscovery });
 const startResearchMonitor = registerResearchRoutes(app, {
-  requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled,
+  requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled, scanDiscovery,
 });
 
 /** Batch mint-safety for watchlist (max 8, sequential to be kind to RugCheck/GoPlus). */

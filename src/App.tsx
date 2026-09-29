@@ -13,6 +13,7 @@ import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
 import { ResearchPanel } from './components/ResearchPanel';
+import { ResearchAutomationPanel } from './components/ResearchAutomationPanel';
 import { useLivePnl } from './useLivePnl';
 import { addWatchMint } from './watchlist';
 import { SettingsModal } from './components/SettingsModal';
@@ -397,6 +398,7 @@ export default function App() {
                 />
               ) : (
                 <>
+                  {chain === 'SOL' && <ResearchAutomationPanel />}
                   {chain === 'SOL' && <DiscoveryFeed
                     buyAmount={buyAmount}
                     mode={mode}

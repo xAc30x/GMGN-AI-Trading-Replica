@@ -105,6 +105,7 @@ async function installWallet(page) {
 async function installApiFixtures(page, scenario = {}) {
   const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0 };
   let paperPosition = null;
+  const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
     account: { initial: '1000000000', cash: paperPosition ? '987950720' : '1000000000' },
     model: { latencyMs: 1000, feeLamports: '10000', entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000 },
@@ -117,6 +118,18 @@ async function installApiFixtures(page, scenario = {}) {
     const url = new URL(route.request().url());
     let body = {};
     try { body = route.request().postDataJSON(); } catch { /* GET request */ }
+    if (url.pathname === '/api/research/automation') {
+      if (route.request().method() === 'POST') Object.assign(researchSettings, body);
+      return route.fulfill({ json: {
+        settings: researchSettings, serviceEnabled: true, schedulerError: null, intervalMs: 120000, at: Date.now(),
+        policy: { amountSol: 0.01, maxPositions: 3, cooldownMs: 86400000 },
+        jobs: [{ source: 'trending', next_at: Date.now() + 120000, lease_until: 0, last_at: Date.now(), failures: 0, last_error: null }],
+        accounts: ['momentum-quality-v1', 'safety-feed-v1'].map(id => ({ id, startedAt: Date.now(),
+          portfolio: { ...paperPortfolio(), positions: [], stats: { ...paperPortfolio().stats, open: 0, closed: 0, realisedPnlLamports: '0', netPnlLamports: '0' } },
+          decisionCounts: [], metrics: { closed: 0, wins: 0, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
+            maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' } })), decisions: [],
+      } });
+    }
     if (url.pathname === '/api/paper/portfolio' || url.pathname === '/api/paper/refresh') return route.fulfill({ json: paperPortfolio() });
     if (url.pathname === '/api/research/scans') return route.fulfill({ json: { totals: { observations: 1, eligible: 0, blocked: 1 }, outcomeCounts: [], rows: [{
       id: 'observation-1', scanId: 'scan-1', at: Date.now(), mint: mintText, symbol: 'REJECTED', decision: 'blocked', source: 'new',
@@ -156,7 +169,7 @@ async function installApiFixtures(page, scenario = {}) {
         volume24hUsd: 1000, change1hPct: null, change24hPct: 2, marketCapUsd: 100000, buys1h: 2, sells1h: 1, ageMinutes: 5 };
       return route.fulfill({ json: { ok: true, source: url.searchParams.get('source'), minLiquidityUsd: 1000,
         tokens: scenario.discovery ? [
-          { ...base, safety: { ok: true, blockers: [], warnings: [], score: 5 } },
+          { ...base, safety: { ok: true, blockers: [], warnings: [], score: 5 }, ranking: { version: 'momentum-quality-v1', action: 'watch', score: 20, reasons: ['Insufficient activity'] } },
           { ...base, mint: inputMint.toBase58(), symbol: 'BLOCKEDTOKEN', safety: { ok: false, blockers: ['Provider unavailable'], warnings: [], score: null } },
         ] : [], at: new Date().toISOString() } });
     }
@@ -375,7 +388,7 @@ test('paper positions open without a wallet, survive reload, and close without b
   await discovery.getByRole('row').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
   await page.getByRole('checkbox', { name: /I understand PAPER/ }).check({ force: true });
   await page.getByRole('button', { name: 'Open paper position', exact: true }).click();
-  const research = page.locator('.research-panel');
+  const research = page.locator('.research-panel').filter({ has: page.getByRole('heading', { name: 'Paper portfolio & scan history', exact: true }) });
   await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
   await expect(research.getByText('0.012049 SOL', { exact: true })).toBeVisible();
   await page.reload();
@@ -391,4 +404,28 @@ test('paper positions open without a wallet, survive reload, and close without b
   assert.equal(counts.paperOpens, 1); assert.equal(counts.paperCloses, 1);
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]').length), 0);
+});
+
+
+test('research controls persist pauses and clearly separate virtual comparison from live execution', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/'); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  const panel = page.getByRole('region', { name: 'Research automation', exact: true });
+  await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Start paper comparison', exact: true }).click();
+  await expect(panel.getByText('Scans: running · Automatic paper entries: running', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Pause automatic paper entries' }).click();
+  await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Pause background scans' }).click();
+  await expect(panel.getByRole('button', { name: 'Start paper comparison' })).toBeDisabled();
+  await page.reload(); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
+  await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /safety-feed-v1/ })).toBeVisible();
+  await expect(page.getByRole('cell', { name: /^watch · 20\/100/ })).toBeVisible();
+  await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
+  assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
 });

@@ -198,7 +198,7 @@ Snapshots retain the feed, time, market fields, safety decision/reasons and
 `safety-only-v1` strategy identifier. These are observations from the selected
 feeds, not an exhaustive market sample, and repeated scans are not independent
 trades. Scans are collected when discovery is requested (normally every 60s while
-the discovery tab is visible); there is no autonomous discovery scheduler yet.
+the discovery tab is visible), and by the background scheduler described below.
 
 The executable backend checks pending 5m, 1h and 24h USD-price outcomes every 15s.
 Prices are observed on/after the target time, within a two-minute window. Missing
@@ -209,7 +209,8 @@ and are distinct from paper P&L. Both accepted and rejected candidates are track
 SOL PAPER now opens durable virtual positions through the dedicated paper API;
 it does not build a transaction or require a connected wallet. This replaces the
 UI's one-shot RPC simulation; the existing low-level simulation helper remains
-available. There is one shared research account per backend database, starting
+available. There is one shared manual paper account per backend database, alongside isolated
+strategy experiment accounts. The manual account starts
 with **1 virtual SOL**, at most **5 open positions**, and one open position per
 mint. The existing server per-trade amount cap also applies. Request IDs make
 entry retries idempotent; cash debits, credits and position changes use SQLite
@@ -259,3 +260,90 @@ All paper writes require the existing service gate and access token. The automat
 research monitor only reads provider data and mutates this local research database;
 it cannot sign or broadcast. Automated tests use temporary databases, fake clocks,
 mocked providers and browser API fixtures, never real trades.
+
+## Background discovery and prospective paper comparison
+
+When the executable backend is running with the existing market-data service gate
+(`GMGN_LIVE=1`), it schedules both **Top boosted** and **Latest profiles** every
+120 seconds by default. `GMGN_RESEARCH_SCAN_SECONDS` accepts 60–3600 seconds. The
+browser is no longer required for discovery collection. No runtime execution
+flags are changed by installation; `GMGN_SOL_BROADCAST` is unrelated to research.
+
+The SOL research panel shows scan status, last attempts, next runs, provider
+errors, and independent pause controls. Background scans default on; automatic
+paper entries **default paused**. **Start paper comparison** enables the two
+virtual portfolios until paused, with that choice saved across restarts. Pausing
+scans or entries prevents an in-flight automatic entry from committing. In-flight
+read-only scans may finish. Existing virtual positions still receive marks and
+exits while the service gate is enabled; pausing new entries does not strand them.
+
+Scheduler due times, failures and five-minute ownership leases are persisted in
+SQLite. A process restart respects the stored schedule; an interrupted scan is
+eligible again when its lease expires. Failed feeds use exponential backoff capped
+at 30 minutes. UI and scheduler requests share in-flight work and a 60-second
+result cache. Discovery and exit monitoring run independently. History has a
+market-observation timestamp as well as the completed scan timestamp, so slow
+screening cannot silently make an old signal fresh.
+
+Two immutable experiment versions receive separate **1 virtual SOL** balances:
+
+| Version | Selection rule |
+|---|---|
+| `momentum-quality-v1` | Highest eligible opportunity score, using only that scan's market and safety inputs. |
+| `safety-feed-v1` | First eligible safety-passing token in original provider feed order, with positive price and liquidity. |
+
+Both use **0.01 SOL entries**, **100 bps slippage**, at most **3 open positions**
+per account, one attempted entry per feed scan, and a **24h per-coin cooldown**
+(including closed positions). They use the same fee, rent, delay and exit model as
+the manual portfolio. A candidate's market observation must remain no older than
+120 seconds at fill time. Both strategies re-run mint safety and obtain a fresh
+server-owned quote. Each decision records its scan, observation, version, inputs,
+selection/skipping/failure reason, and deterministic trade ID. Retries cannot
+spend virtual cash twice. Manual trades and their balances are preserved by the
+SQLite migration and remain isolated from these experiments.
+
+The initial ranking is a **research hypothesis**, not an AI probability estimate:
+
+- Safety must pass; missing required numeric inputs produce WATCH, not an invented score.
+- Liquidity at least $25k; pair age 30 minutes through 7 days.
+- At least 30 transactions in 1h; buy transaction share at least 55%.
+- 1h price change above 0% through 30%; 5m change from 0% through 15%.
+- Positive 1h and 5m volume, with an overall score of at least 60/100.
+- Four components, each capped at 25 points: liquidity / $100k; (buy share − 0.5)
+  / 0.2; (5m volume × 12 / 1h volume) / 2; and 1h price change / 10.
+
+Volume acceleration compares two overlapping windows; transaction counts are not
+unique buyers, and neither detects wash trading. Pair age is not necessarily token
+age. Boosts and profile listings are a biased candidate universe. These defaults
+have not been optimized or validated. Manual buys remain separate from the ranking.
+
+The comparison reports net expectancy per **closed** trade, profit factor, open
+and closed counts, realized P&L, total P&L using fresh marks, and **sampled** maximum
+equity drawdown. Missing marks make current total P&L unknown and are counted;
+drawdown can understate intraperiod or outage losses. Zero losses are labeled
+without inventing an infinite profit factor. Fewer than 30 closed trades are
+explicitly labeled insufficient; 30 trades does not establish significance.
+
+This is forward evaluation of fixed rules on outcomes that occur after selection.
+Ranking never reads the recorded future-return table. There is no fitted model,
+historical strategy optimizer, walk-forward tuning, or proven edge yet. Both
+experiments share the candidate scans, but may abstain differently or obtain
+slightly different quote times; this is a portfolio-policy comparison, not a
+claim of identical fills or equal trade counts. Experiment definitions are stored
+with the accounts; changing a definition requires a new version rather than
+mixing incompatible results. Retired versions remain visible and their existing
+positions continue to be monitored; only current versions receive new entries.
+
+Additional authenticated routes:
+
+- `GET /api/research/automation`: settings, persisted job status, portfolios,
+  comparison metrics and recent decision receipts.
+- `POST /api/research/automation`: a partial `{scanning: boolean, autoPaper: boolean}`
+  update. It changes virtual research controls only and cannot change service or
+  broadcast gates. Pause is available even when the market-data gate is off.
+
+Use persistent local storage and one running backend for predictable timing.
+Database leases and atomic fills protect against duplicate workers, but this is
+not a distributed research platform. Tests cover browser-free scheduling,
+restart/backoff/lease recovery, stale signals, concurrent workers, in-flight pause,
+legacy data migration, account isolation and forward-only scoring with fixtures.

@@ -344,8 +344,9 @@ export interface DiscoveredToken {
   change1hPct: number | null;
   change24hPct: number | null;
   marketCapUsd: number | null;
-  buys1h: number;
-  sells1h: number;
+  buys1h: number | null;
+  sells1h: number | null;
+  ranking?: OpportunityRanking;
   ageMinutes: number | null;
   safety: { ok: boolean; blockers: string[]; warnings: string[]; score: number | null };
 }
@@ -391,3 +392,22 @@ export const openPaperPosition = (body: { id: string; mint: string; symbol: stri
   jsonFetch<{ position: PaperPosition }>('/api/paper/open', { method: 'POST', body: JSON.stringify(body) });
 export const closePaperPosition = (id: string) =>
   jsonFetch<{ position: PaperPosition }>('/api/paper/close', { method: 'POST', body: JSON.stringify({ id }) });
+
+export interface OpportunityRanking {
+  version: string; score: number | null; action: 'candidate' | 'watch' | 'blocked'; reasons: string[];
+}
+export interface ResearchAutomationResponse {
+  settings: { scanning: boolean; autoPaper: boolean };
+  serviceEnabled: boolean; schedulerError: string | null; monitorError?: string | null; intervalMs: number; at: number;
+  policy: { amountSol: number; maxPositions: number; cooldownMs: number };
+  jobs: { source: string; next_at: number; lease_until: number; failures: number; last_at: number | null; last_error: string | null }[];
+  accounts: { id: string; currentVersion?: boolean; startedAt: number; portfolio: PaperPortfolioResponse;
+    decisionCounts: { status: string; count: number }[];
+    metrics: { closed: number; wins: number; netExpectancySol: number | null; profitFactor: number | null;
+      noLosingTrades: boolean; maxObservedDrawdownPct: number | null; missingEquitySamples: number; evaluation: string } }[];
+  decisions: { id: string; account_id: string; at: number; mint: string | null; status: string;
+    data: { source: string; selectionReason?: string; reason?: string | null; error?: string | null; ranking?: OpportunityRanking | null } }[];
+}
+export const fetchResearchAutomation = () => jsonFetch<ResearchAutomationResponse>('/api/research/automation');
+export const updateResearchAutomation = (settings: Partial<ResearchAutomationResponse['settings']>) =>
+  jsonFetch('/api/research/automation', { method: 'POST', body: JSON.stringify(settings) });

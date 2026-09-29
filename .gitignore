@@ -26,6 +26,7 @@ dist-ssr
 # Secrets — never commit
 server/.env
 server/.trade-ledger.json
+server/.trade-ledger.json.sqlite*
 server/.portfolio-ledger.json
 server/.portfolio-ledger.json.lock
 server/.portfolio-ledger.sqlite

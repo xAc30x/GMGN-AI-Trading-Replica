@@ -400,10 +400,18 @@ export async function releasePortfolioReservation(tradeId) {
   });
 }
 
-export async function markPortfolioReservationSubmitted(tradeId, signature) {
+export async function markPortfolioReservationSubmitted(tradeId, signature, expected) {
   return withLedgerLock(async (ledger) => {
     const reservation = ledger.reservations.find((item) => item.tradeId === tradeId);
-    if (reservation) reservation.signature = signature;
+    if (!reservation || !expected || reservation.walletAddress !== expected.walletAddress ||
+        reservation.mint !== expected.mint || reservation.amountLamports !== expected.amountLamports ||
+        !Number.isSafeInteger(reservation.lastValidBlockHeight) ||
+        !Number.isSafeInteger(expected.currentBlockHeight) ||
+        expected.currentBlockHeight > reservation.lastValidBlockHeight ||
+        (reservation.signature && reservation.signature !== signature)) {
+      throw Object.assign(new Error('Matching active buy reservation required for broadcast'), { status: 409 });
+    }
+    reservation.signature = signature;
   });
 }
 

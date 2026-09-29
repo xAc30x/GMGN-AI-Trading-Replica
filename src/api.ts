@@ -8,6 +8,8 @@ export interface HealthResponse {
   liveEnabled?: boolean;
   tokenConfigured?: boolean;
   maxNativeAmount?: number;
+  maxPortfolioSol?: number;
+  maxOpenPositions?: number;
   /** Always true in this build — server never signs LIVE swaps. */
   serverSigningDisabled?: boolean;
   credentials: {
@@ -21,6 +23,7 @@ export interface HealthResponse {
   /** Quote-ready (API key + wallet + GMGN_LIVE + local token). Not a signing ready flag. */
   liveReady: boolean;
   solLiveEnabled?: boolean;
+  solBroadcastEnabled?: boolean;
   solWalletTrading?: boolean;
   maxSlippageBps?: number;
   defaultSlippageBps?: number;
@@ -223,9 +226,10 @@ export function fetchSolSwapTx(body: {
   amountLamports?: string;
   slippageBps?: number;
   userPublicKey: string;
+  tradeId: string;
   quote?: Record<string, unknown>;
   confirm: true;
-  mode: 'LIVE';
+  mode: 'LIVE' | 'PAPER';
 }): Promise<SolSwapTxResponse> {
   return jsonFetch('/api/sol/swap-tx', { method: 'POST', body: JSON.stringify(body) });
 }
@@ -308,3 +312,82 @@ export function fetchWatchlistScan(mints: string[]): Promise<WatchlistScanRespon
     body: JSON.stringify({ mints }),
   });
 }
+
+export interface PositionValueResult {
+  mint: string;
+  amountAtomic: string;
+  ok: boolean;
+  outLamports?: string;
+  priceImpactPct?: string;
+  error?: string;
+  stale?: boolean;
+  quotedAt?: number;
+}
+
+export function fetchPositionValues(items: { mint: string; amountAtomic: string }[]): Promise<{
+  ok: boolean;
+  results: PositionValueResult[];
+  at: number;
+}> {
+  return jsonFetch('/api/sol/position-values', { method: 'POST', body: JSON.stringify({ items }) });
+}
+
+export interface DiscoveredToken {
+  mint: string;
+  symbol: string;
+  name: string;
+  dex?: string;
+  url?: string;
+  priceUsd: number | null;
+  liquidityUsd: number;
+  volume24hUsd: number;
+  change1hPct: number | null;
+  change24hPct: number | null;
+  marketCapUsd: number | null;
+  buys1h: number;
+  sells1h: number;
+  ageMinutes: number | null;
+  safety: { ok: boolean; blockers: string[]; warnings: string[]; score: number | null };
+}
+
+export function fetchDiscover(source: 'trending' | 'new'): Promise<{
+  ok: boolean;
+  source: string;
+  minLiquidityUsd: number;
+  tokens: DiscoveredToken[];
+  at: string;
+}> {
+  return jsonFetch(`/api/sol/discover?source=${source}`);
+}
+
+export function fetchPricesInSol(mints: string[]): Promise<{ ok: boolean; prices: Record<string, number>; solUsd: number; at: number }> {
+  return jsonFetch(`/api/sol/prices?mints=${mints.map(encodeURIComponent).join(',')}`);
+}
+
+export interface PaperPosition {
+  id: string; mint: string; symbol: string; state: 'open' | 'closed'; openedAt: number;
+  costLamports: string; quantityAtomic: string; realisedPnlLamports?: string;
+  closedAt?: number; exitReason?: string; exitPending: string | null; lastError: string | null;
+  mark: { at: number; netLamports: string; pnlPct: number } | null;
+}
+export interface PaperPortfolioResponse {
+  account: { initial: string; cash: string };
+  model: { latencyMs: number; feeLamports: string; entryRentLamports: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
+  positions: PaperPosition[];
+  stats: { open: number; closed: number; wins: number; realisedPnlLamports: string; equityLamports: string | null; netPnlLamports: string | null };
+  workerError: string | null; monitoringEnabled: boolean; at: number;
+}
+export interface ScanHistoryResponse {
+  totals: { observations: number; eligible: number | null; blocked: number | null };
+  outcomeCounts: { status: string; count: number }[];
+  rows: { id: string; scanId: string; at: number; source: string; mint: string; symbol: string; decision: string;
+    safety: { blockers: string[] }; priceUsd: number | null;
+    outcomes: { horizon: number; status: string; returnPct: number | null; error: string | null }[] }[];
+}
+export const fetchPaperPortfolio = () => jsonFetch<PaperPortfolioResponse>('/api/paper/portfolio');
+export const refreshPaperPortfolio = () => jsonFetch<PaperPortfolioResponse>('/api/paper/refresh', { method: 'POST' });
+export const fetchScanHistory = () => jsonFetch<ScanHistoryResponse>('/api/research/scans?limit=30');
+export const openPaperPosition = (body: { id: string; mint: string; symbol: string; amount: number; slippageBps: number }) =>
+  jsonFetch<{ position: PaperPosition }>('/api/paper/open', { method: 'POST', body: JSON.stringify(body) });
+export const closePaperPosition = (id: string) =>
+  jsonFetch<{ position: PaperPosition }>('/api/paper/close', { method: 'POST', body: JSON.stringify({ id }) });

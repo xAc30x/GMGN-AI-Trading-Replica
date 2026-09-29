@@ -11,12 +11,20 @@ import { MetricCards } from './components/MetricCards';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
+import { DiscoveryFeed } from './components/DiscoveryFeed';
+import { ResearchPanel } from './components/ResearchPanel';
+import { useLivePnl } from './useLivePnl';
+import { addWatchMint } from './watchlist';
 import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
-import { loadLivePositions, recordLivePosition, saveLivePositions } from './positions';
+import {
+  loadLivePositions,
+  reconcileWalletTrades,
+  LIVE_POSITIONS_STORAGE_KEY,
+} from './positions';
 import { fetchHealth } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
-import { isPublicSolanaRpc } from './solana/constants';
+import { isPublicSolanaRpc, makeConnection } from './solana/constants';
 import { hasLocalToken } from './localToken';
 import {
   DEFAULT_TRENDING_CMD,
@@ -56,7 +64,29 @@ export default function App() {
   const [command, setCommand] = useState(DEFAULT_TRENDING_CMD);
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
+  const [paperVersion, setPaperVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  const reconcileTrades = useCallback(async () => {
+    if (!wallet.publicKey) return;
+    try {
+      const walletAddress = wallet.publicKey.toBase58();
+      const attempts = await reconcileWalletTrades(makeConnection(), walletAddress);
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+      const unresolved = attempts.filter(attempt => attempt.walletAddress === walletAddress &&
+        (attempt.status === 'submitted' || attempt.status === 'unknown'));
+      if (unresolved.length > 0) {
+        showToast(`${unresolved.length} trade signature(s) remain unresolved; reconcile before retrying`);
+      }
+    } catch {
+      showToast('Trade reconciliation unavailable; pending signatures remain reserved');
+    }
+  }, [wallet.publicKey, showToast]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -68,29 +98,45 @@ export default function App() {
 
   useEffect(() => {
     void fetchHealth()
-      .then((h) => setLiveReady(h.liveReady))
+      .then((h) => {
+        setLiveReady(h.liveReady);
+      })
       .catch(() => setLiveReady(false));
   }, []);
 
   useEffect(() => {
-    try { saveLivePositions(positions); }
-    catch { setToast('Position storage unavailable. Keep transaction signatures before closing this page.'); }
-  }, [positions]);
+    const syncStoredTrades = (event: StorageEvent) => {
+      if (event.key && event.key !== LIVE_POSITIONS_STORAGE_KEY) return;
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+    };
+    window.addEventListener('storage', syncStoredTrades);
+    return () => window.removeEventListener('storage', syncStoredTrades);
+  }, []);
+
+  useEffect(() => {
+    void reconcileTrades();
+    const onFocus = () => { void reconcileTrades(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') onFocus(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [reconcileTrades]);
 
   const visiblePositions = positions.filter(p => mode === 'SHADOW'
     ? p.demo
     : !p.demo && p.walletAddress === wallet.publicKey?.toBase58());
+  const [watchVersion, setWatchVersion] = useState(0);
+  const { pnl: livePnl, refreshing: pnlRefreshing } = useLivePnl(visiblePositions, wallet.publicKey, mode !== 'SHADOW' && chain === 'SOL');
+  const trackedPositions = visiblePositions.filter(p => (livePnl[p.id]?.zeroStreak ?? 0) < 2);
   const awaiting = tokens.filter((t) => t.decision === 'buy').length;
   const exposure = useMemo(
     () => visiblePositions.reduce((s, p) => s + p.sizeSol, 0),
     [visiblePositions],
   );
   const escapeAlerts = visiblePositions.filter((p) => p.demo && (p.alert || p.pnlPct < -10)).length;
-
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(null), 2800);
-  }, []);
 
   const appendLog = useCallback((kind: LogEntry['kind'], category: string, message: string) => {
     setLogs((prev) => [
@@ -120,6 +166,10 @@ export default function App() {
           showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
           return;
         }
+        if (m === 'LIVE' && chain === 'SOL' && !h.solBroadcastEnabled) {
+          showToast('SOL transaction broadcast is disabled — PAPER remains available without it');
+          return;
+        }
         if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
           showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
         }
@@ -127,7 +177,7 @@ export default function App() {
         showToast('Server not reachable — start npm run server');
         return;
       }
-      if (chain === 'SOL' && !wallet.connected) {
+      if (m === 'LIVE' && chain === 'SOL' && !wallet.connected) {
         showToast('Connect Phantom or Solflare first (needed as fee-payer pubkey)');
         return;
       }
@@ -140,7 +190,9 @@ export default function App() {
         if (!ok) return;
       } else {
         const ok = window.confirm(
-          'PAPER mode: real quotes + rug checks + RPC simulate. Nothing is signed or sent. Continue?',
+          chain === 'SOL'
+            ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
+            : 'PAPER on this chain creates quote/copy intents only. Continue?',
         );
         if (!ok) return;
       }
@@ -152,7 +204,7 @@ export default function App() {
           ? 'Mode LIVE — wallet-signed SOL Jupiter.'
           : 'Mode LIVE — quote/intent only on this chain.'
         : m === 'PAPER'
-          ? 'Mode PAPER — simulate only (no send). Screening table remains mock.'
+          ? 'Mode PAPER — simulate only (no send). Discovery and watchlist use live screening.'
           : 'Mode SHADOW (mock UI only).';
     appendLog('SCREEN', 'mode', msg);
   };
@@ -193,9 +245,11 @@ export default function App() {
       appendLog(
         'BUY',
         'paper',
-        `PAPER sim ok: ${token.symbol} · ${amount} SOL · CA ${meta.tokenAddress.slice(0, 8)}… (not sent)`,
+        `PAPER position opened: ${token.symbol} · ${amount} SOL · CA ${meta.tokenAddress.slice(0, 8)}… (virtual funds)`,
       );
-      showToast('PAPER simulation recorded — nothing sent on-chain');
+      setPaperVersion(v => v + 1);
+      setBuyToken(null);
+      showToast('Paper position saved — tracking simulated exits');
       return;
     }
 
@@ -205,18 +259,7 @@ export default function App() {
         'live',
         `SOL wallet swap: ${token.symbol} · ${amount} SOL · tx ${meta.hash?.slice(0, 10) || '?'}…`,
       );
-      setPositions(prev => recordLivePosition(prev, {
-        id: 'live-' + meta.hash,
-        symbol: token.symbol,
-        address: meta.tokenAddress,
-        walletAddress: meta.walletAddress,
-        signature: meta.hash,
-        pnlPct: 0,
-        sizeSol: amount,
-        entryAge: '0m',
-        chain: 'SOL',
-        demo: false,
-      }));
+      setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
       showToast(meta.hash ? `Wallet swap landed · ${meta.hash.slice(0, 12)}…` : 'Wallet swap submitted');
       window.setTimeout(() => setBuyToken(null), 1200);
       return;
@@ -273,7 +316,7 @@ export default function App() {
           percent: 100,
           slippageBps: 100,
         });
-        setPositions((prev) => prev.filter((p) => p.id !== id));
+        setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         appendLog(
           'SELL',
           'live',
@@ -281,6 +324,8 @@ export default function App() {
         );
         showToast(`Closed · ${res.signature.slice(0, 12)}…`);
       } catch (e) {
+        setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
+        void reconcileTrades();
         showToast(e instanceof Error ? e.message : 'SOL close failed');
       }
       return;
@@ -351,17 +396,33 @@ export default function App() {
                   mode={mode}
                 />
               ) : (
-                <LiveWatchlistTable
-                  buyAmount={buyAmount}
-                  onBuyAmount={setBuyAmount}
-                  onBuy={setBuyToken}
-                  mode={mode}
-                />
+                <>
+                  {chain === 'SOL' && <DiscoveryFeed
+                    buyAmount={buyAmount}
+                    mode={mode}
+                    onBuy={setBuyToken}
+                    onWatch={(mint, symbol) => {
+                      try {
+                        addWatchMint(mint, symbol);
+                        setWatchVersion(v => v + 1);
+                        showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
+                      } catch { showToast('Watchlist storage unavailable'); }
+                    }}
+                  />}
+                  <LiveWatchlistTable
+                    key={watchVersion}
+                    buyAmount={buyAmount}
+                    onBuyAmount={setBuyAmount}
+                    onBuy={setBuyToken}
+                    mode={mode}
+                  />
+                </>
               )}
+              {mode !== 'SHADOW' && chain === 'SOL' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
             <div className="col-side">
-              <PositionEscapeMonitor positions={visiblePositions} onClose={(id) => void handleClosePosition(id)} />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}
@@ -382,6 +443,7 @@ export default function App() {
         amount={buyAmount}
         mode={mode}
         chain={chain}
+        onReconcile={() => { void reconcileTrades(); }}
         onClose={() => setBuyToken(null)}
         onConfirm={handleBuyConfirm}
       />

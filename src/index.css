@@ -818,6 +818,9 @@ table.screen tr:hover td {
 
 .modal {
   width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-card-2);
   border: 1px solid var(--border-soft);
   border-radius: 14px;
@@ -1601,3 +1604,12 @@ table.screen tr:hover td {
   border-radius: 8px;
   padding: 8px 10px;
 }
+
+.research-content { padding: 0 16px 16px; }
+.research-stats { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 16px 0; }
+.research-stats strong { display: block; font-size: 16px; margin-top: 4px; }
+.research-panel details { margin-top: 20px; }
+.research-panel summary { cursor: pointer; padding: 8px 0; }
+
+.research-panel .help { font-size: 12px; line-height: 1.6; color: #b7b0a2; }
+.research-panel table.screen { min-width: 640px; }

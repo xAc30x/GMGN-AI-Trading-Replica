@@ -33,6 +33,7 @@ export interface Position {
   symbol: string;
   walletAddress?: string;
   signature?: string;
+  tradeSignatures?: string[];
   /** Token CA for LIVE close */
   address?: string;
   chain?: Chain;

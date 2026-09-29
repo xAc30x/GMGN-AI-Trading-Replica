@@ -8,8 +8,11 @@ import { envNumber } from './config.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
+import bs58 from 'bs58';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import { createPublicKey, verify as verifySignature } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +29,18 @@ import {
 } from './jupiterSol.js';
 import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
+import { registerMarketRoutes } from './marketRoutes.js';
+import { registerResearchRoutes } from './researchRoutes.js';
+import { marketSnapshots } from './discovery.js';
+import { recordScan } from './researchStore.js';
+import { claimBroadcast, completeBroadcast } from './tradeLedger.js';
+import {
+  finishPortfolioReservation,
+  getWalletMintBalance,
+  markPortfolioReservationSubmitted,
+  releasePortfolioReservation,
+  reservePortfolioBuy,
+} from './portfolioLedger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.join(__dirname, '.env');
@@ -34,6 +49,7 @@ const SOLANA_RPC_URL =
   process.env.SOLANA_RPC_URL ||
   process.env.VITE_SOLANA_RPC_URL ||
   'https://api.mainnet-beta.solana.com';
+const portfolioConnection = new Connection(SOLANA_RPC_URL, { commitment: 'confirmed' });
 const RPC_IS_PUBLIC = /api\.mainnet-beta\.solana\.com/i.test(SOLANA_RPC_URL);
 const VITE_ORIGIN = 'http://127.0.0.1:5173';
 
@@ -87,6 +103,8 @@ const CRED_ENV_KEYS = new Set([
 ]);
 
 const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
+const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
+const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
 const TOKEN_HEADER = 'x-gmgn-token';
 
 /** Load GMGN_* from Grok Bot secret-request store (card) without logging values. */
@@ -141,6 +159,10 @@ function stripPersistedPrivateKey() {
 
 function liveEnabled() {
   return process.env.GMGN_LIVE === '1';
+}
+
+function solBroadcastEnabled() {
+  return process.env.GMGN_SOL_BROADCAST === '1';
 }
 
 function getLocalToken() {
@@ -247,6 +269,16 @@ function requireLiveFlag(req, res, next) {
     return res.status(403).json({
       ok: false,
       error: 'LIVE disabled on server. Export GMGN_LIVE=1 in the process that runs npm run server.',
+    });
+  }
+  next();
+}
+
+function requireSolBroadcast(req, res, next) {
+  if (!solBroadcastEnabled()) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Solana transaction broadcast disabled. Set GMGN_SOL_BROADCAST=1 to enable wallet-submitted transactions.',
     });
   }
   next();
@@ -524,8 +556,11 @@ app.get('/api/health', async (_req, res) => {
     cliInstalled: installed,
     liveEnabled: enabled,
     solLiveEnabled: enabled,
+    solBroadcastEnabled: solBroadcastEnabled(),
     tokenConfigured,
     maxNativeAmount: getMaxNativeAmount(),
+    maxPortfolioSol: MAX_PORTFOLIO_SOL,
+    maxOpenPositions: MAX_OPEN_POSITIONS,
     maxSlippageBps: MAX_SLIPPAGE_BPS,
     defaultSlippageBps: DEFAULT_SLIPPAGE_BPS,
     maxPriceImpactPct: MAX_PRICE_IMPACT_PCT,
@@ -738,13 +773,58 @@ export function rpcProxyRejects(body) {
   return null;
 }
 app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
-  // A signed transaction can arrive after LIVE was disabled, or outside the UI.
-  if (req.body?.method === 'sendTransaction') return requireLiveFlag(req, res, next);
+  // Broadcast needs a second opt-in beyond enabling quotes and simulations.
+  if (req.body?.method === 'sendTransaction') {
+    return requireLiveFlag(req, res, () => requireSolBroadcast(req, res, next));
+  }
   next();
 }, async (req, res) => {
   const reject = rpcProxyRejects(req.body);
   if (reject) {
     return res.status(400).json({ jsonrpc: '2.0', id: req.body?.id ?? null, error: { code: -32601, message: reject } });
+  }
+  let tradeId;
+  if (req.body.method === 'sendTransaction') {
+    tradeId = req.get('x-gmgn-trade-id');
+    const signedTransaction = req.body.params?.[0];
+    const claim = claimBroadcast(tradeId, signedTransaction);
+    if (claim.kind === 'invalid') {
+      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: claim.error } });
+    }
+    if (claim.kind === 'cached') {
+      return res.json({ jsonrpc: '2.0', id: req.body.id ?? 1, result: claim.signature });
+    }
+    if (claim.kind !== 'claimed') {
+      const message = claim.kind === 'conflict'
+        ? 'Trade ID was already used for a different signed transaction'
+        : 'Trade ID is pending or has a prior uncertain result; reconcile before retrying';
+      return res.status(409).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32009, message } });
+    }
+    try {
+      const transaction = VersionedTransaction.deserialize(Buffer.from(signedTransaction, 'base64'));
+      const requiredSignatures = transaction.message.header.numRequiredSignatures;
+      const messageBytes = transaction.message.serialize();
+      const validSignatures = transaction.signatures.length === requiredSignatures &&
+        transaction.signatures.slice(0, requiredSignatures).every((signature, index) => {
+          if (!signature || signature.every((byte) => byte === 0)) return false;
+          const rawKey = transaction.message.staticAccountKeys[index].toBuffer();
+          const publicKey = createPublicKey({
+            key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), rawKey]),
+            format: 'der',
+            type: 'spki',
+          });
+          return verifySignature(null, messageBytes, publicKey, signature);
+        });
+      const signature = transaction.signatures[0];
+      if (!validSignatures) {
+        completeBroadcast(tradeId, { failed: true });
+        return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: 'Signed transaction signature is invalid' } });
+      }
+      await markPortfolioReservationSubmitted(tradeId, bs58.encode(signature));
+    } catch (error) {
+      completeBroadcast(tradeId, { failed: true });
+      return res.status(400).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32602, message: `Invalid signed transaction: ${error.message}` } });
+    }
   }
   try {
     const upstream = await fetch(SOLANA_RPC_URL, {
@@ -754,6 +834,15 @@ app.post('/api/sol/rpc', requireLocalToken, (req, res, next) => {
       signal: AbortSignal.timeout(20_000),
     });
     const text = await upstream.text();
+    if (tradeId) {
+      try {
+        const result = JSON.parse(text);
+        if (result.error) completeBroadcast(tradeId, { failed: true });
+        else if (upstream.ok && typeof result.result === 'string') {
+          completeBroadcast(tradeId, { signature: result.result });
+        }
+      } catch { /* retain pending state when the RPC response is ambiguous */ }
+    }
     res.status(upstream.status).type('application/json').send(text);
   } catch (e) {
     res.status(502).json({ jsonrpc: '2.0', id: req.body.id ?? null, error: { code: -32000, message: `RPC upstream failed: ${e instanceof Error ? e.message : String(e)}` } });
@@ -837,12 +926,14 @@ app.post('/api/sol/mint-safety', requireLocalToken, requireLiveFlag, async (req,
  * Client wallet must sign. Never holds a private key.
  */
 app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(async (req, res) => {
+  let reservationId;
+  let reservationKept = false;
   try {
     const body = req.body || {};
-    if (body.confirm !== true || body.mode !== 'LIVE') {
+    if (body.confirm !== true || !['LIVE', 'PAPER'].includes(body.mode)) {
       return res.status(403).json({
         ok: false,
-        error: 'SOL swap-tx rejected: confirm must be true and mode must be LIVE',
+        error: 'SOL swap-tx rejected: confirm must be true and mode must be LIVE or PAPER',
       });
     }
     const userPublicKey = String(body.userPublicKey || '').trim();
@@ -850,6 +941,7 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       return res.status(400).json({ ok: false, error: 'userPublicKey required (base58)' });
     }
     const outputMint = assertOutputToken('sol', body.outputMint || body.outputToken);
+    const tradeId = String(body.tradeId || '');
     const slippageBps = clampSlippageBps(body.slippageBps);
     let lamports;
     if (body.amountLamports != null && body.amountLamports !== '') {
@@ -860,6 +952,19 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
 
     const safety = await assessMint(outputMint);
     assertMintSafe(safety);
+
+    const portfolio = body.mode === 'LIVE'
+      ? await reservePortfolioBuy({
+        connection: portfolioConnection,
+        walletAddress: userPublicKey,
+        mint: outputMint,
+        tradeId,
+        amountLamports: lamports,
+        maxPortfolioSol: MAX_PORTFOLIO_SOL,
+        maxOpenPositions: MAX_OPEN_POSITIONS,
+      })
+      : null;
+    if (body.mode === 'LIVE') reservationId = tradeId;
 
     // Never use a caller's quote: only the exact validated intent reaches Jupiter.
     const quote = await jupiterQuote({
@@ -874,7 +979,14 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     }
     const swap = await jupiterSwapTx({ quoteResponse: quote, userPublicKey });
     if (!swap.swapTransaction) {
-      return res.status(502).json({ ok: false, error: 'Jupiter did not return swapTransaction' });
+      throw Object.assign(new Error('Jupiter did not return swapTransaction'), { status: 502 });
+    }
+    if (!Number.isSafeInteger(swap.lastValidBlockHeight) || swap.lastValidBlockHeight < 1) {
+      throw Object.assign(new Error('Jupiter transaction expiry is missing or invalid'), { status: 502 });
+    }
+    if (reservationId) {
+      await finishPortfolioReservation(tradeId, swap.lastValidBlockHeight);
+      reservationKept = true;
     }
     res.json({
       ok: true,
@@ -890,8 +1002,12 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
       outputMint,
       inputMint: SOL_MINT,
       mintSafety: safety,
+      portfolio,
     });
   } catch (e) {
+    if (reservationId && !reservationKept) {
+      try { await releasePortfolioReservation(reservationId); } catch { /* fail closed; stale reservation remains */ }
+    }
     res.status(e.status || 500).json({ ok: false, error: e.message, details: e.details });
   }
 }));
@@ -933,6 +1049,14 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
     }
     if (BigInt(amountAtomic) <= 0n) {
       return res.status(400).json({ ok: false, error: 'Sell amount must be > 0' });
+    }
+    const walletBalance = await getWalletMintBalance({
+      connection: portfolioConnection,
+      walletAddress: userPublicKey,
+      mint: inputMint,
+    });
+    if (BigInt(amountAtomic) > BigInt(walletBalance.amountAtomic)) {
+      return res.status(400).json({ ok: false, error: 'Sell amount exceeds the chain-reconciled wallet balance' });
     }
 
     const safety = await assessMint(inputMint);
@@ -980,6 +1104,11 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 }));
 
 
+
+registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken });
+const startResearchMonitor = registerResearchRoutes(app, {
+  requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled,
+});
 
 /** Batch mint-safety for watchlist (max 8, sequential to be kind to RugCheck/GoPlus). */
 app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (req, res) => {
@@ -1031,7 +1160,19 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
         });
       }
     }
-    res.json({ ok: true, results, scannedAt: new Date().toISOString() });
+    const validMints = results.filter(r => !r.error).map(r => r.mint);
+    let market = [];
+    let marketError = null;
+    try { market = await marketSnapshots(validMints); } catch (e) { marketError = e.message; }
+    const observedAt = Date.now();
+    const snapshots = results.map(r => ({
+      ...(market.find(t => t.mint === r.mint) || { mint: r.mint, symbol: '', priceUsd: null, missingMarketData: true }),
+      marketError,
+      safety: { ok: r.ok, blockers: r.blockers || [], warnings: r.warnings || [],
+        score: r.rug?.rugcheck?.scoreNormalised ?? null, checkedAt: observedAt },
+    }));
+    const scanId = recordScan('watchlist', snapshots, observedAt);
+    res.json({ ok: true, results, scanId, scannedAt: new Date(observedAt).toISOString() });
   } catch (e) {
     res.status(e.status || 500).json({ ok: false, error: e.message });
   }
@@ -1047,6 +1188,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   loadEnvFile();
   stripPersistedPrivateKey();
   ensureLocalToken();
+  startResearchMonitor();
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
     console.log(`CORS origin: ${VITE_ORIGIN}`);

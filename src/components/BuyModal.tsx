@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   buildTradeIntent,
@@ -6,6 +6,7 @@ import {
   fetchMintSafety,
   fetchQuote,
   fetchSolQuote,
+  openPaperPosition,
   type MintSafetyResponse,
   type QuoteResponse,
   type SolQuoteResponse,
@@ -13,7 +14,7 @@ import {
 import { isDemoTokenAddress } from '../data/mockData';
 import { hasLocalToken } from '../localToken';
 import { DEFAULT_SLIPPAGE_BPS, MAX_SLIPPAGE_BPS } from '../solana/constants';
-import { paperSimulateSolSwap, signAndSendSolSwap } from '../solana/sendJupiterSwap';
+import { signAndSendSolSwap } from '../solana/sendJupiterSwap';
 import type { Chain, ScreenToken, TradeMode } from '../types';
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
   amount: number;
   mode: TradeMode;
   chain: Chain;
+  onReconcile: () => void;
   onClose: () => void;
   onConfirm: (token: ScreenToken, amount: number, meta?: LiveBuyMeta) => void;
 }
@@ -44,11 +46,12 @@ const NATIVE_HINT: Record<string, string> = {
   ETH: 'ETH',
 };
 
-export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Props) {
+export function BuyModal({ token, amount, mode, chain, onReconcile, onClose, onConfirm }: Props) {
   const wallet = useWallet();
   const { connection: _connection } = useConnection();
   void _connection;
 
+  const paperRequest = useRef<{ key: string; id: string } | null>(null);
   const [amt, setAmt] = useState(String(amount));
   const [tokenAddress, setTokenAddress] = useState('');
   const [caConfirm, setCaConfirm] = useState('');
@@ -230,7 +233,6 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     !submitting &&
     !safetyLoading &&
     safetyOk && quoteCurrent && Boolean(solQuote?.ok) &&
-    Boolean(wallet.publicKey) &&
     slippageBps >= 1 &&
     slippageBps <= maxSlip;
 
@@ -241,7 +243,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     else if (caConfirm.trim() !== ca) solBlockers.push('Re-typed address does not match');
     if (!Number.isFinite(nAmt) || nAmt <= 0 || nAmt > maxNative) solBlockers.push(`Amount must be above 0 and at most ${maxNative} SOL`);
     if (slippageBps < 1 || slippageBps > maxSlip) solBlockers.push(`Slippage must be 1 to ${maxSlip} bps`);
-    if (!wallet.publicKey) solBlockers.push('Connect your wallet (button at top right)');
+    if (!isPaper && !wallet.publicKey) solBlockers.push('Connect your wallet (button at top right)');
     if (!isPaper && !wallet.signTransaction) solBlockers.push('Connected wallet cannot sign transactions');
     if (safetyLoading) solBlockers.push('Running safety checks…');
     else if (ca.length >= 32 && !safetyOk) solBlockers.push('Safety checks have not passed for this token');
@@ -265,6 +267,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
       const result = await signAndSendSolSwap({
         wallet,
         outputMint: tokenAddress.trim(),
+        symbol: token.symbol,
         amountSol: Number(amt) || amount,
         slippageBps,
       });
@@ -280,30 +283,25 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
     } catch (e) {
       setStatusMsg(null);
       setQuoteErr(e instanceof Error ? e.message : String(e));
+      onReconcile();
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleSolPaper = async () => {
-    if (!canSolPaper || !wallet.publicKey) return;
+    if (!canSolPaper) return;
     setSubmitting(true);
-    setStatusMsg('PAPER: building + simulating Jupiter swap (nothing sent)…');
+    setStatusMsg('PAPER: checking safety and obtaining a delayed fill quote…');
     try {
-      const sim = await paperSimulateSolSwap({
-        userPublicKey: wallet.publicKey.toBase58(),
-        outputMint: tokenAddress.trim(),
-        amountSol: Number(amt) || amount,
-        slippageBps,
-      });
-      if (!sim.ok) {
-        setQuoteErr(sim.err || 'Simulation failed');
-        setStatusMsg(null);
-        return;
+      if (paperRequest.current?.key !== currentQuoteKey) {
+        paperRequest.current = { key: currentQuoteKey, id: crypto.randomUUID() };
       }
-      setStatusMsg(
-        `PAPER ok · ~${sim.unitsConsumed ?? '?'} CU · min out ${sim.otherAmountThreshold ?? sim.outAmount ?? '—'} (not sent)`,
-      );
+      await openPaperPosition({
+        id: paperRequest.current.id, mint: tokenAddress.trim(), symbol: token.symbol,
+        amount: Number(amt), slippageBps,
+      });
+      setStatusMsg('Paper position saved. Simulated exits are now monitored.');
       onConfirm(token, Number(amt) || amount, {
         tokenAddress: tokenAddress.trim(),
         live: true,
@@ -463,7 +461,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
                 )}
               </div>
             )}
-            {isSolLive && !wallet.publicKey && (
+            {isSolLive && !isPaper && !wallet.publicKey && (
               <div className="help">Connect Phantom or Solflare in the header to sign.</div>
             )}
           </div>
@@ -509,8 +507,8 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
         )}
 
         <div className="exit-plan">
-          <h4>Notional exit idea (NOT placed on-chain)</h4>
-          <pre>SL -35% · TP +60%→sell 40% / +150%→sell 30% · trailing 25%</pre>
+          <h4>{isPaper && isSolLive ? 'Paper exit rules' : 'Notional exit idea (NOT placed on-chain)'}</h4>
+          <pre>{isPaper && isSolLive ? 'Full exit: SL -20% · TP +30% · time 60m' : 'SL -35% · TP +60%→sell 40% / +150%→sell 30% · trailing 25%'}</pre>
           <div className="thesis">
             This replica does not submit stop-loss, take-profit, or trailing orders.
           </div>
@@ -521,7 +519,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
           {mode === 'SHADOW'
             ? 'SHADOW mode: confirm to record intent only, no real order.'
             : isPaper && isSolLive
-              ? 'SOL PAPER: runs mint/rug checks, builds a Jupiter tx, and simulates on RPC. Nothing is signed or sent.'
+              ? 'SOL PAPER: saves a virtual position using a fresh quote after a 1s delay. Minimum quote output models slippage; each side costs 0.00001 SOL and entry adds 0.00203928 SOL estimated rent. No transaction is built, signed or sent.'
               : isSolLive
                 ? 'SOL LIVE: Jupiter builds an unsigned swap; your wallet must approve amount, mint, and slippage. Irreversible once confirmed.'
                 : 'LIVE/PAPER on this chain: quote + copy intent only. Switch chain to SOL for wallet-signed or paper simulates.'}
@@ -560,7 +558,7 @@ export function BuyModal({ token, amount, mode, chain, onClose, onConfirm }: Pro
               disabled={!canSolPaper}
               onClick={() => void handleSolPaper()}
             >
-              {submitting ? 'Simulating…' : 'Simulate SOL swap (paper)'}
+              {submitting ? 'Opening paper position…' : 'Open paper position'}
             </button>
           ) : isSolLive ? (
             <button

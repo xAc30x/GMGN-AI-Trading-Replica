@@ -11,7 +11,8 @@
     "server": "node server/index.js",
     "dev:all": "concurrently -k -n web,api -c lime,cyan \"npm run dev -- --host 127.0.0.1 --port 5173\" \"npm run server\"",
     "test": "node --test server/tests/*.test.js",
-    "test:money": "node --test server/tests/moneyPath.test.js"
+    "test:money": "node --test server/tests/moneyPath.test.js",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "@solana/wallet-adapter-base": "^0.9.28",
@@ -20,6 +21,7 @@
     "@solana/wallet-adapter-react-ui": "^0.9.40",
     "@solana/wallet-adapter-solflare": "^0.6.34",
     "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
     "buffer": "^6.0.3",
     "concurrently": "^10.0.5",
     "cors": "^2.8.6",
@@ -30,6 +32,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
@@ -42,6 +45,6 @@
     "vite-plugin-node-polyfills": "^0.28.0"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   }
 }

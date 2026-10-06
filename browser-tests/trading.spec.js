@@ -628,8 +628,8 @@ test('inspector blocks trading a token whose full safety checks failed', async (
   await expect(inspector.getByRole('checkbox')).toHaveCount(0);
 });
 
-test('LIVE inspector shows exposure and position limits and hands off to wallet signing without signing', async ({ page }) => {
-  await installApiFixtures(page, { discovery: true });
+test('LIVE inspector shows limits and a quote preview, and a click without holding never signs', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
   await openLiveTrade(page, false);
   await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
   const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
@@ -638,10 +638,17 @@ test('LIVE inspector shows exposure and position limits and hands off to wallet 
   await expect(limits).toContainText('Exposure after0.010 / 0.100');
   await expect(limits).toContainText('Positions after1 / 5');
   await expect(trade).toContainText('Exits are not placed on-chain');
-  await trade.getByRole('button', { name: 'Continue to wallet signing · 0.01 SOL' }).click();
-  await expect(page.getByRole('dialog', { name: 'One-Click Buy · TEST' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign SOL swap in wallet' })).toBeDisabled();
+  const preview = trade.getByRole('region', { name: 'What your wallet will be asked to sign' });
+  await expect(preview).toContainText('You send0.01 SOL');
+  await expect(preview).toContainText('Minimum receive≥ 9 units TEST');
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  // A normal click is not enough: nothing is built or signed.
+  await send.click();
+  await page.waitForTimeout(1600);
+  assert.equal(counts.builds, 0);
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+  await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toHaveCount(0);
 });
 
 test('status bar shows the latest real activity, the server limits and that the server never signs', async ({ page }) => {
@@ -710,4 +717,48 @@ test('watchlist matrix view shows every check per token and lists every warning'
   await expect(page.getByRole('complementary', { name: 'Inspector' }).getByRole('heading', { name: 'TEST' })).toBeVisible();
   await watchlist.getByRole('button', { name: 'Table' }).click();
   await expect(watchlist.getByRole('button', { name: 'Inspect TEST' })).toBeVisible();
+});
+
+async function holdButton(page, button, ms) {
+  await button.scrollIntoViewIfNeeded();
+  const box = await button.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(ms);
+  await page.mouse.up();
+}
+
+test('holding the LIVE send button signs through the existing validated flow, then blocks a second buy', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
+  await openLiveTrade(page, false);
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  // Releasing early cancels.
+  await holdButton(page, send, 500);
+  await page.waitForTimeout(1200);
+  assert.equal(counts.builds, 0);
+  await holdButton(page, send, 1600);
+  await expect(trade.getByRole('status')).toContainText('Confirmed:', { timeout: 10_000 });
+  assert.equal(counts.builds, 1);
+  assert.equal(counts.sends, 1);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 1);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]')[0]?.status)).toBe('confirmed');
+  await expect(trade.getByRole('button', { name: 'Already holding · 1 position per mint' })).toBeDisabled();
+  await expect(page.getByRole('contentinfo', { name: 'Status bar' })).toContainText('SOL wallet swap: TEST · 0.01 SOL');
+});
+
+test('LIVE hold-to-send stops before the wallet when the built transaction fails local checks', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true, unsafe: true });
+  await openLiveTrade(page, false);
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  await holdButton(page, send, 1600);
+  await expect(trade.getByRole('alert')).toBeVisible({ timeout: 10_000 });
+  assert.equal(counts.builds, 1);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+  assert.equal(counts.sends, 0);
 });

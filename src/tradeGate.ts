@@ -52,7 +52,7 @@ export function tradeGate(i: TradeGateInput): TradeGate {
     needsAck,
     label: i.mode === 'PAPER'
       ? `Continue to paper buy · ${i.amount} SOL`
-      : `Continue to wallet signing · ${i.amount} SOL`,
+      : `Hold to send to wallet · ${i.amount} SOL`,
   };
 }
 

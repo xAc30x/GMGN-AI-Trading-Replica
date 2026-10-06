@@ -4,6 +4,7 @@ import { age, usd } from '../format';
 import { checkStatus, safetyVerdict, type InspectTarget } from '../safetyChecks';
 import type { TradeMode } from '../types';
 import { InspectorTrade } from './InspectorTrade';
+import type { LiveBought } from './LiveSend';
 import { SafetyCheckList } from './SafetyChecks';
 
 interface Props {
@@ -16,8 +17,11 @@ interface Props {
   liveExposureSol: number;
   liveOpenMints: string[];
   paperVersion: number;
-  /** Opens the existing buy dialog for this token at the chosen amount. */
+  /** PAPER: opens the existing buy dialog for this token at the chosen amount. */
   onTrade: (target: InspectTarget) => void;
+  /** LIVE: a wallet-signed buy from the inspector confirmed on-chain. */
+  onLiveBought: (target: InspectTarget, r: LiveBought) => void;
+  onReconcile: () => void;
 }
 
 type SafetyResult = MintSafetyResponse | WatchlistScanItem;
@@ -33,7 +37,7 @@ function pctText(n: number | null | undefined): string {
  * summary, so the full checks are fetched once when the token is opened.
  * Render with key={mint} so each token starts with fresh state.
  */
-export function TokenInspector({ target, onClose, mode, health, amount, onAmount, liveExposureSol, liveOpenMints, paperVersion, onTrade }: Props) {
+export function TokenInspector({ target, onClose, mode, health, amount, onAmount, liveExposureSol, liveOpenMints, paperVersion, onTrade, onLiveBought, onReconcile }: Props) {
   const [fetched, setFetched] = useState<SafetyResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -175,6 +179,8 @@ export function TokenInspector({ target, onClose, mode, health, amount, onAmount
         key={mode}
         mode={mode}
         mint={target.mint}
+        symbol={target.symbol}
+        decimals={result?.decimals}
         verdict={result ? safetyVerdict(result) : null}
         checked={Boolean(result) && !loading}
         checking={loading}
@@ -186,6 +192,8 @@ export function TokenInspector({ target, onClose, mode, health, amount, onAmount
         liveOpenMints={liveOpenMints}
         paperVersion={paperVersion}
         onTrade={() => onTrade(target)}
+        onLiveBought={(r) => onLiveBought(target, r)}
+        onReconcile={onReconcile}
       />
     </aside>
   );

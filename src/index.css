@@ -592,7 +592,8 @@ select:focus {
   flex-direction: column;
   gap: 10px;
   padding-bottom: 14px;
-  max-height: calc(100vh - 24px);
+  /* Leave room for the sticky status bar at the bottom of the page. */
+  max-height: calc(100vh - 24px - 34px);
   overflow-y: auto;
 }
 
@@ -2714,3 +2715,74 @@ table.screen tr:hover td {
 }
 
 .matrix-empty { padding: 0 14px 14px; }
+
+/* LIVE preview and hold-to-send (step 8b, screen 1b). */
+.tx-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--mode-line);
+  border-radius: 8px;
+  background: var(--mode-tint);
+}
+
+.tx-preview h4 {
+  margin: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tx-preview dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tx-preview dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+}
+
+.tx-preview dt { color: var(--text-muted); }
+.tx-preview dd { margin: 0; font-family: var(--mono); }
+
+.tx-checks {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.hold-btn {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.hold-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: rgba(0, 0, 0, 0.28);
+  transition: width 0.15s;
+}
+
+.hold-btn.is-holding .hold-fill {
+  width: 100%;
+  transition: width var(--hold-ms, 1.3s) linear;
+}
+
+.hold-label { position: relative; }
+.hold-hint { text-align: center; }
+
+/* Keep focused or scrolled-to elements clear of the sticky status bar. */
+html {
+  scroll-padding-bottom: 40px;
+}

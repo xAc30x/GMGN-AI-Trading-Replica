@@ -3,10 +3,13 @@ import { fetchPaperPortfolio, type HealthResponse, type PaperPortfolioResponse }
 import type { Verdict } from '../safetyChecks';
 import { AMOUNT_PRESETS, tradeGate, tradeRails } from '../tradeGate';
 import type { TradeMode } from '../types';
+import { LiveSend, type LiveBought } from './LiveSend';
 
 interface Props {
   mode: TradeMode;
   mint: string;
+  symbol: string;
+  decimals: number | undefined;
   verdict: Verdict | null;
   checked: boolean;
   checking: boolean;
@@ -20,14 +23,18 @@ interface Props {
   liveOpenMints: string[];
   /** Bumps after a paper position opens or closes, so the holding check refreshes. */
   paperVersion: number;
+  /** PAPER: opens the existing buy dialog. */
   onTrade: () => void;
+  /** LIVE: a wallet-signed buy confirmed on-chain. */
+  onLiveBought: (r: LiveBought) => void;
+  onReconcile: () => void;
 }
 
 const LAMPORTS = 1e9;
 
 /**
- * Trade controls for the inspected token. The button only opens the existing buy dialog,
- * which keeps every check it has today (fresh quote, mint re-scan, confirmation, wallet).
+ * Trade controls for the inspected token. In PAPER the button opens the existing buy dialog.
+ * In LIVE it shows a quote preview and a hold-to-send button that uses the existing signing code.
  */
 export function InspectorTrade(p: Props) {
   const [acked, setAcked] = useState(false);
@@ -131,9 +138,22 @@ export function InspectorTrade(p: Props) {
         </label>
       )}
 
-      <button type="button" className="trade-btn" disabled={!gate.can} onClick={() => { if (gate.can) p.onTrade(); }}>
-        {gate.label}
-      </button>
+      {isPaper ? (
+        <button type="button" className="trade-btn" disabled={!gate.can} onClick={() => { if (gate.can) p.onTrade(); }}>
+          {gate.label}
+        </button>
+      ) : (
+        <LiveSend
+          mint={p.mint}
+          symbol={p.symbol}
+          decimals={p.decimals}
+          amount={p.amount}
+          health={p.health}
+          gate={gate}
+          onBought={p.onLiveBought}
+          onReconcile={p.onReconcile}
+        />
+      )}
     </section>
   );
 }

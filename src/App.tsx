@@ -480,6 +480,15 @@ export default function App() {
               liveOpenMints={visiblePositions.flatMap((p) => (p.address ? [p.address] : []))}
               paperVersion={paperVersion}
               onTrade={(t) => setBuyToken(t.buyToken)}
+              onLiveBought={(t, r) => handleBuyConfirm(t.buyToken, r.amountSol, {
+                hash: r.signature,
+                explorerUrl: r.explorerUrl,
+                tokenAddress: t.mint,
+                live: true,
+                walletSigned: true,
+                walletAddress: r.walletAddress,
+              })}
+              onReconcile={() => { void reconcileTrades(); }}
             />
           </div>
         ) : (

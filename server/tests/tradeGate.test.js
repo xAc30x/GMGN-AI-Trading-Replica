@@ -18,7 +18,7 @@ const ready = {
 
 test('a passing, unheld token within limits can be traded in PAPER and LIVE', () => {
   assert.deepEqual(tradeGate(ready), { can: true, needsAck: false, label: 'Continue to paper buy · 0.01 SOL' });
-  assert.equal(tradeGate({ ...ready, mode: 'LIVE' }).label, 'Continue to wallet signing · 0.01 SOL');
+  assert.equal(tradeGate({ ...ready, mode: 'LIVE' }).label, 'Hold to send to wallet · 0.01 SOL');
 });
 
 test('failed checks, an existing position or missing data block the button', () => {

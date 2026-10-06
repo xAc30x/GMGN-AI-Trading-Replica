@@ -108,7 +108,7 @@ async function installWallet(page) {
 }
 
 async function installApiFixtures(page, scenario = {}) {
-  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, safetyChecks: 0 };
+  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, paperClosePercents: [], safetyChecks: 0 };
   let paperPosition = null;
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
@@ -149,7 +149,11 @@ async function installApiFixtures(page, scenario = {}) {
     }
     if (url.pathname === '/api/paper/close') {
       counts.paperCloses++;
-      paperPosition = { ...paperPosition, state: 'closed', exitReason: 'manual', realisedPnlLamports: '-2559280' };
+      counts.paperClosePercents.push(body.percent);
+      paperPosition = body.percent < 100
+        ? { ...paperPosition, costLamports: '9036960', realisedPnlLamports: '-771070',
+            partialExits: [{ at: Date.now(), percent: body.percent, quantityAtomic: '2', proceedsLamports: '12241250', realisedPnlLamports: '-771070' }] }
+        : { ...paperPosition, state: 'closed', exitReason: 'manual', realisedPnlLamports: '-2559280' };
       return route.fulfill({ json: { position: paperPosition } });
     }
     if (url.pathname === '/api/health') {
@@ -418,19 +422,23 @@ test('paper positions open without a wallet, survive reload, and close without b
   await page.getByRole('checkbox', { name: /I understand PAPER/ }).check({ force: true });
   await page.getByRole('button', { name: 'Open paper position', exact: true }).click();
   const research = page.locator('.research-panel').filter({ has: page.getByRole('heading', { name: 'Paper portfolio & scan history', exact: true }) });
-  await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
+  const sell = research.getByRole('group', { name: 'Sell paper FOUND' });
+  await expect(sell.getByRole('button')).toHaveText(['10%', '25%', '50%', '75%', '100%']);
   await expect(research.getByText('0.012049 SOL', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
-  await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
-  await research.getByRole('button', { name: 'Close paper' }).click();
+  await sell.getByRole('button', { name: 'Sell 25%' }).click();
+  await expect(research.getByRole('cell', { name: '0.009037 SOL after 1 partial sell', exact: true })).toBeVisible();
+  await expect(research.getByText('Realized so far -0.000771 SOL', { exact: true })).toBeVisible();
+  await sell.getByRole('button', { name: 'Sell 100%' }).click();
   await expect(research.getByText('manual', { exact: true })).toBeVisible();
   await expect(research.getByText('-0.002559 SOL', { exact: true }).last()).toBeVisible();
   await research.locator('summary').click();
   await expect(research.getByRole('cell', { name: 'REJECTED Latest profiles', exact: true })).toBeVisible();
   await expect(research.getByText('-50.00%', { exact: true })).toBeVisible();
   await research.screenshot({ path: '/tmp/gmgn-paper-research.png' });
-  assert.equal(counts.paperOpens, 1); assert.equal(counts.paperCloses, 1);
+  assert.equal(counts.paperOpens, 1); assert.equal(counts.paperCloses, 2);
+  assert.deepEqual(counts.paperClosePercents, [25, 100]);
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]').length), 0);
 });

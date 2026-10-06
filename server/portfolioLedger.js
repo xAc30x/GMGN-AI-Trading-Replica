@@ -42,15 +42,15 @@ function createDatabase(file) {
     database.close();
     throw error;
   }
-  database.exec('PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;');
+  database.exec('PRAGMA busy_timeout = 0;');
   return database;
 }
 
-async function beginImmediate(database) {
+async function execWithBusyRetry(database, sql) {
   const deadline = Date.now() + 10_000;
   for (;;) {
     try {
-      database.exec('BEGIN IMMEDIATE');
+      database.exec(sql);
       return;
     } catch (error) {
       if (![5, 6].includes(error?.errcode) || Date.now() >= deadline) {
@@ -123,7 +123,8 @@ async function withLedgerLock(action) {
   let transactionStarted = false;
   try {
     database = createDatabase(file);
-    await beginImmediate(database);
+    await execWithBusyRetry(database, 'PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;');
+    await execWithBusyRetry(database, 'BEGIN IMMEDIATE');
     transactionStarted = true;
     ensureSchema(database);
     const version = database.prepare('PRAGMA user_version').get().user_version;
@@ -155,7 +156,7 @@ async function withLedgerLock(action) {
     const ledger = readLedger(database);
     const result = await action(ledger);
     writeLedger(database, ledger);
-    database.exec('COMMIT');
+    await execWithBusyRetry(database, 'COMMIT');
     transactionStarted = false;
     return result;
   } catch (error) {

@@ -64,3 +64,20 @@ test('requests above the per-minute limit get 429 for that visitor only', async 
   assert.equal(statuses[REQUEST_LIMIT], 429);
   assert.equal((await get(base, '192.0.2.45', TOKEN)).status, 200);
 });
+
+test('requests without a token, or with only Basic credentials, never trigger the lockout', async t => {
+  const base = await startApp(t);
+  const visitor = '203.0.113.50';
+  for (let i = 0; i < AUTH_LIMIT + 2; i += 1) {
+    assert.equal((await get(base, visitor)).status, 401);
+    const basic = await fetch(`${base}/api/paper/portfolio`, {
+      headers: { 'x-forwarded-for': visitor, authorization: 'Basic dXNlcjpwYXNz' },
+    });
+    assert.equal(basic.status, 401);
+  }
+  assert.equal((await get(base, visitor, TOKEN)).status, 200);
+  const bearer = await fetch(`${base}/api/paper/portfolio`, {
+    headers: { 'x-forwarded-for': '203.0.113.51', authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(bearer.status, 200, 'Bearer tokens still work');
+});

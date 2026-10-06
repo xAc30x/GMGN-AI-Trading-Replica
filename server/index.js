@@ -262,10 +262,12 @@ function requireLocalToken(req, res, next) {
   }
   if (authFailures.rejectIfLocked(req, res)) return;
   const hdr = req.get(TOKEN_HEADER) || '';
-  const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  const provided = hdr.trim() || bearer.trim();
+  // Only a Bearer value is a token. The proxy's password page makes browsers send Basic credentials.
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const provided = hdr.trim() || (bearerMatch ? bearerMatch[1].trim() : '');
   if (!tokensEqual(provided, expected)) {
-    authFailures.recordFailure(req);
+    // A missing token is not a guess (the page polls before one is entered), so only wrong ones count.
+    if (provided) authFailures.recordFailure(req);
     return res.status(401).json({ ok: false, error: 'Invalid or missing X-GMGN-Token' });
   }
   next();

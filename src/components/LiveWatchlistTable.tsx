@@ -12,12 +12,18 @@ import {
   shortMint,
   type WatchMint,
 } from '../watchlist';
+import type { InspectTarget } from '../safetyChecks';
+import { SafetyPips } from './SafetyChecks';
 
 interface Props {
   buyAmount: number;
   onBuyAmount: (n: number) => void;
   onBuy: (t: ScreenToken) => void;
   mode: TradeMode;
+  /** Mint shown in the inspector, highlighted in the table. */
+  selectedMint?: string | null;
+  /** Called with the row's latest scan, or null when the selected row is removed. */
+  onSelect?: (t: InspectTarget | null) => void;
 }
 
 function toScreenToken(w: WatchMint, scan?: WatchlistScanItem): ScreenToken {
@@ -61,7 +67,7 @@ function toScreenToken(w: WatchMint, scan?: WatchlistScanItem): ScreenToken {
   };
 }
 
-export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode }: Props) {
+export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, selectedMint, onSelect }: Props) {
   const [watch, setWatch] = useState<WatchMint[]>(() => loadWatchlist());
   const [scans, setScans] = useState<Record<string, WatchlistScanItem>>({});
   const [scanning, setScanning] = useState(false);
@@ -114,6 +120,7 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode }: Prop
   };
 
   const onRemove = (mint: string) => {
+    if (mint === selectedMint) onSelect?.(null);
     setWatch(removeWatchMint(mint));
     setScans((prev) => {
       const n = { ...prev };
@@ -194,17 +201,33 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode }: Prop
             {rows.map((t) => {
               const scan = scans[t.address || ''];
               return (
-                <tr key={t.id}>
+                <tr key={t.id} className={selectedMint === t.address ? 'is-selected' : undefined}>
                   <td>
-                    <div className="token-cell">
-                      <span className="sym">{t.symbol}</span>
-                      <span className="meta">{t.age}</span>
-                    </div>
+                    {onSelect ? (
+                      <button
+                        type="button"
+                        className="token-cell row-select"
+                        aria-pressed={selectedMint === t.address}
+                        aria-label={`Inspect ${t.symbol}`}
+                        onClick={() => onSelect({ mint: t.address || t.id, symbol: t.symbol, source: 'watchlist', scan })}
+                      >
+                        <span className="sym">{t.symbol}</span>
+                        <span className="meta">{t.age}</span>
+                      </button>
+                    ) : (
+                      <div className="token-cell">
+                        <span className="sym">{t.symbol}</span>
+                        <span className="meta">{t.age}</span>
+                      </div>
+                    )}
                   </td>
                   <td>
                     <code title={t.address}>{t.mintShort}</code>
                   </td>
-                  <td className={t.safeOk ? 'safe-ok' : 'safe-bad'}>{t.safe}</td>
+                  <td className={t.safeOk ? 'safe-ok' : 'safe-bad'}>
+                    {scan && scan.checks.length > 0 && <SafetyPips checks={scan.checks} />}
+                    <div>{t.safe}</div>
+                  </td>
                   <td>
                     {t.timing}
                     {scan?.warnings && scan.warnings.length > 0 && (

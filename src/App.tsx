@@ -17,6 +17,8 @@ import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
+import { TokenInspector } from './components/TokenInspector';
+import type { InspectTarget } from './safetyChecks';
 import { ResearchPanel } from './components/ResearchPanel';
 import { ResearchAutomationPanel } from './components/ResearchAutomationPanel';
 import { useLivePnl } from './useLivePnl';
@@ -142,6 +144,7 @@ export default function App() {
     ? p.demo
     : !p.demo && p.walletAddress === wallet.publicKey?.toBase58());
   const [watchVersion, setWatchVersion] = useState(0);
+  const [inspect, setInspect] = useState<InspectTarget | null>(null);
   const { pnl: livePnl, refreshing: pnlRefreshing } = useLivePnl(visiblePositions, wallet.publicKey, mode !== 'SHADOW' && chain === 'SOL');
   const trackedPositions = visiblePositions.filter(p => (livePnl[p.id]?.zeroStreak ?? 0) < 2);
   const awaiting = tokens.filter((t) => t.decision === 'buy').length;
@@ -403,7 +406,7 @@ export default function App() {
         tab={tab}
         onTab={setTab}
         chain={chain}
-        onChain={(next) => { setChain(next); applyMode('SHADOW'); setBuyToken(null); }}
+        onChain={(next) => { setChain(next); applyMode('SHADOW'); setBuyToken(null); setInspect(null); }}
         mode={mode}
         onMode={(m) => void handleMode(m)}
         clock={clock}
@@ -437,6 +440,8 @@ export default function App() {
                 buyAmount={buyAmount}
                 mode={mode}
                 onBuy={setBuyToken}
+                selectedMint={inspect?.mint ?? null}
+                onSelect={setInspect}
                 onWatch={(mint, symbol) => {
                   try {
                     addWatchMint(mint, symbol);
@@ -453,17 +458,14 @@ export default function App() {
                 onBuyAmount={setBuyAmount}
                 onBuy={setBuyToken}
                 mode={mode}
+                selectedMint={inspect?.mint ?? null}
+                onSelect={setInspect}
               />
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
               {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
-            <aside className="ws-col ws-inspector panel" aria-label="Inspector">
-              <div className="panel-head">
-                <h2>Inspector</h2>
-              </div>
-              <p className="help">Select a token in Discover or Watchlist to see its safety checks and trade it here.</p>
-            </aside>
+            <TokenInspector key={inspect?.mint ?? 'none'} target={inspect} onClose={() => setInspect(null)} />
           </div>
         ) : (
           <div className="token-layout">

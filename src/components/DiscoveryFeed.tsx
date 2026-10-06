@@ -3,29 +3,21 @@ import { fetchDiscover, type DiscoveredToken } from '../api';
 import { hasLocalToken } from '../localToken';
 import type { ScreenToken, TradeMode } from '../types';
 import { shortMint } from '../watchlist';
+import { age, usd } from '../format';
+import type { InspectTarget } from '../safetyChecks';
 
 interface Props {
   buyAmount: number;
   mode: TradeMode;
   onBuy: (t: ScreenToken) => void;
   onWatch: (mint: string, symbol: string) => void;
+  /** Mint shown in the inspector, highlighted in the list. */
+  selectedMint?: string | null;
+  onSelect?: (t: InspectTarget) => void;
 }
 
 const REFRESH_MS = 60_000;
 
-function usd(n: number | null): string {
-  if (n == null) return '—';
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(0)}`;
-}
-function age(m: number | null): string {
-  if (m == null) return '—';
-  if (m < 60) return `${m}m`;
-  if (m < 60 * 48) return `${Math.round(m / 60)}h`;
-  return `${Math.round(m / 1440)}d`;
-}
 function pct(n: number | null) {
   if (n == null) return <span>—</span>;
   return <span className={n >= 0 ? 'safe-ok' : 'safe-bad'}>{(n >= 0 ? '+' : '') + n.toFixed(1)}%</span>;
@@ -56,7 +48,7 @@ function toBuyToken(t: DiscoveredToken): ScreenToken {
   };
 }
 
-export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
+export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch, selectedMint, onSelect }: Props) {
   const [source, setSource] = useState<'trending' | 'new'>('trending');
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [loading, setLoading] = useState(false);
@@ -142,13 +134,26 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
           <li className="discover-empty help">{loading ? 'Scanning feed…' : 'No tokens right now.'}</li>
         )}
         {rows.map((t) => (
-          <li key={t.mint} className={`discover-row ${t.safety.ok ? 'is-pass' : 'is-blocked'}`}>
-            <div className="discover-id">
-              <span className="sym">
-                {t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.symbol || shortMint(t.mint)}</a> : t.symbol}
-              </span>
-              <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
-            </div>
+          <li key={t.mint} className={`discover-row ${t.safety.ok ? 'is-pass' : 'is-blocked'} ${selectedMint === t.mint ? 'is-selected' : ''}`}>
+            {onSelect ? (
+              <button
+                type="button"
+                className="discover-id row-select"
+                aria-pressed={selectedMint === t.mint}
+                aria-label={`Inspect ${t.symbol || shortMint(t.mint)}`}
+                onClick={() => onSelect({ mint: t.mint, symbol: t.symbol || shortMint(t.mint), source: 'discover', discovered: t })}
+              >
+                <span className="sym">{t.symbol || shortMint(t.mint)}</span>
+                <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
+              </button>
+            ) : (
+              <div className="discover-id">
+                <span className="sym">
+                  {t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.symbol || shortMint(t.mint)}</a> : t.symbol}
+                </span>
+                <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
+              </div>
+            )}
             <div className="discover-change">{pct(t.change1hPct)} <span className="meta">1h</span></div>
             <div className="discover-stats">
               <span>liq {usd(t.liquidityUsd)}</span>

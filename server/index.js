@@ -33,6 +33,7 @@ import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
 import { securityHeaders } from './securityHeaders.js';
+import { authFailureGuard, requestRateLimit } from './rateLimit.js';
 import { assertTradeId, authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
@@ -104,6 +105,9 @@ const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
 const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
 const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
 const TOKEN_HEADER = 'x-gmgn-token';
+const API_REQUESTS_PER_MIN = envNumber('GMGN_API_REQUESTS_PER_MIN', 300, { min: 30, max: 10000, integer: true });
+const AUTH_FAILURES_PER_15_MIN = envNumber('GMGN_AUTH_FAILURES_PER_15_MIN', 10, { min: 1, max: 1000, integer: true });
+const authFailures = authFailureGuard({ maxFailures: AUTH_FAILURES_PER_15_MIN, windowMs: 15 * 60_000 });
 
 function loadEnvFile() {
   if (fs.existsSync(ENV_PATH)) {
@@ -255,10 +259,12 @@ function requireLocalToken(req, res, next) {
   if (!expected) {
     return res.status(503).json({ ok: false, error: 'GMGN_LOCAL_TOKEN is not configured' });
   }
+  if (authFailures.rejectIfLocked(req, res)) return;
   const hdr = req.get(TOKEN_HEADER) || '';
   const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
   const provided = hdr.trim() || bearer.trim();
   if (!tokensEqual(provided, expected)) {
+    authFailures.recordFailure(req);
     return res.status(401).json({ ok: false, error: 'Invalid or missing X-GMGN-Token' });
   }
   next();
@@ -537,12 +543,16 @@ function writeEnvMerge(updates, { allowKeys = CRED_ENV_KEYS } = {}) {
 
 export const app = express();
 app.disable('x-powered-by');
+// Behind the HTTPS reverse proxy on this machine, read the visitor address from X-Forwarded-For,
+// but only when the request itself comes from loopback, so remote clients cannot fake it.
+app.set('trust proxy', 'loopback');
 app.use(securityHeaders({ browserRpcUrl: process.env.VITE_SOLANA_RPC_URL }));
 app.use(
   cors({
     origin: [VITE_ORIGIN, 'http://localhost:5173'],
   }),
 );
+app.use('/api', requestRateLimit({ perMinute: API_REQUESTS_PER_MIN }));
 app.use(express.json({ limit: '32kb' }));
 
 app.get('/api/health', async (_req, res) => {

@@ -1,6 +1,9 @@
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import type { Chain, TabId, TradeMode } from '../types';
 
+/** What we know about the RPC endpoint. `unknown` until the server answers. */
+export type RpcKind = 'public' | 'dedicated' | 'unknown';
+
 interface Props {
   tab: TabId;
   onTab: (t: TabId) => void;
@@ -9,36 +12,36 @@ interface Props {
   mode: TradeMode;
   onMode: (m: TradeMode) => void;
   clock: string;
-  latency: number;
-  liveReady?: boolean;
-  onOpenCredentials?: () => void;
+  rpc: RpcKind;
+  onOpenSettings?: () => void;
 }
 
 const CHAINS: Chain[] = ['SOL', 'BSC', 'Base', 'ETH'];
+const MODES: TradeMode[] = ['SHADOW', 'PAPER', 'LIVE'];
 
-export function Header({
-  tab,
-  onTab,
-  chain,
-  onChain,
-  mode,
-  onMode,
-  clock,
-  latency,
-  liveReady,
-  onOpenCredentials,
-}: Props) {
+const MODE_TITLES: Record<TradeMode, string> = {
+  SHADOW: 'SHADOW: mock data and intents only',
+  PAPER: 'PAPER: fresh quotes and safety checks, virtual funds, nothing sent',
+  LIVE: 'LIVE: real funds, your wallet approves every transaction',
+};
+
+const RPC_LABELS: Record<RpcKind, { text: string; title: string }> = {
+  public: { text: 'PUBLIC RPC', title: 'Public Solana RPC: fine for smoke tests, unreliable for trading. Set SOLANA_RPC_URL and VITE_SOLANA_RPC_URL.' },
+  dedicated: { text: 'DEDICATED RPC', title: 'A dedicated Solana RPC URL is configured.' },
+  unknown: { text: 'RPC ?', title: 'Server status not available yet.' },
+};
+
+export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, onOpenSettings }: Props) {
+  const rpcLabel = RPC_LABELS[rpc];
   return (
     <header className="header">
       <div className="brand">
         <div className="brand-icon" aria-hidden>
-          ⚡
+          AI
         </div>
         <div>
-          <h1>AI TRADER // Screen + One-Click Trade</h1>
-          <p>
-            v0.0.1 · Rules-based research + paper comparison · wallet-approved live swaps
-          </p>
+          <h1>AI Trader</h1>
+          <p>Solana · rules-based screening · wallet-signed swaps</p>
         </div>
       </div>
 
@@ -46,16 +49,18 @@ export function Header({
         <button
           type="button"
           className={`tab ${tab === 'token' ? 'active' : ''}`}
+          aria-current={tab === 'token' ? 'page' : undefined}
           onClick={() => onTab('token')}
         >
-          Token Screen
+          Trade
         </button>
         <button
           type="button"
           className={`tab ${tab === 'wallet' ? 'active' : ''}`}
+          aria-current={tab === 'wallet' ? 'page' : undefined}
           onClick={() => onTab('wallet')}
         >
-          Wallet Eval
+          Wallet eval
         </button>
       </nav>
 
@@ -63,17 +68,13 @@ export function Header({
         <div className="clock" title="UTC clock">
           {clock}
         </div>
-        <div className="chip">
-          <span className="dot" />
-          MCP DEMO
-        </div>
+        <span className={`chip rpc-chip rpc-${rpc}`} title={rpcLabel.title}>
+          <span className="dot" aria-hidden />
+          {rpcLabel.text}
+        </span>
         <label className="chip select">
           CHAIN{' '}
-          <select
-            value={chain}
-            onChange={(e) => onChain(e.target.value as Chain)}
-            aria-label="Chain"
-          >
+          <select value={chain} onChange={(e) => onChain(e.target.value as Chain)} aria-label="Chain">
             {CHAINS.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -81,41 +82,33 @@ export function Header({
             ))}
           </select>
         </label>
-        <div className="chip">DEMO LAT {latency}ms</div>
-        {onOpenCredentials && (
-          <button
-            type="button"
-            className="chip cred-chip"
-            onClick={onOpenCredentials}
-            title="Access token (required for PAPER/LIVE)"
-          >
-            {liveReady ? '● QUOTE READY' : '○ CREDS'}
-          </button>
-        )}
         <div className="wallet-btn-wrap">
           <WalletMultiButton />
         </div>
-        <button
-          type="button"
-          className={`mode-btn ${mode === 'LIVE' ? 'live' : ''} ${mode === 'PAPER' ? 'paper' : ''}`}
-          onClick={() => {
-            const next = mode === 'SHADOW' ? 'PAPER' : mode === 'PAPER' ? 'LIVE' : 'SHADOW';
-            onMode(next);
-          }}
-          title={
-            mode === 'LIVE'
-              ? 'LIVE: SOL wallet-signed Jupiter (real funds)'
-              : mode === 'PAPER'
-                ? 'PAPER: quote + rug gate + simulate, no send'
-                : 'SHADOW: mock UI only'
-          }
-        >
-          <span className="dot" />
-          MODE {mode}
-        </button>
-        <div className="avatar" title="Demo user">
-          ◆
+        <div className="mode-switch" role="group" aria-label="Trading mode">
+          {MODES.map((m) => {
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                type="button"
+                className={`mode-opt mode-opt-${m.toLowerCase()} ${active ? 'active' : ''}`}
+                aria-pressed={active}
+                title={MODE_TITLES[m]}
+                onClick={() => {
+                  if (!active) onMode(m);
+                }}
+              >
+                {m === 'LIVE' && !active ? 'LIVE ⊘' : m}
+              </button>
+            );
+          })}
         </div>
+        {onOpenSettings && (
+          <button type="button" className="header-btn" onClick={onOpenSettings}>
+            Settings
+          </button>
+        )}
       </div>
     </header>
   );

@@ -238,7 +238,7 @@ export function BuyModal({ token, amount, mode, chain, onReconcile, onClose, onC
 
   const solBlockers: string[] = [];
   if (isSolLive) {
-    if (!hasLocalToken()) solBlockers.push('Paste the access token in CREDS first');
+    if (!hasLocalToken()) solBlockers.push('Paste the access token in Settings first');
     if (ca.length < 32 || isDemoTokenAddress(ca)) solBlockers.push('Enter the real token address');
     else if (caConfirm.trim() !== ca) solBlockers.push('Re-typed address does not match');
     if (!Number.isFinite(nAmt) || nAmt <= 0 || nAmt > maxNative) solBlockers.push(`Amount must be above 0 and at most ${maxNative} SOL`);

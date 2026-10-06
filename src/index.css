@@ -173,19 +173,20 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 280px;
 }
 
 .brand-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
   background: var(--lime);
   display: grid;
   place-items: center;
   flex-shrink: 0;
   color: #110f0c;
-  font-size: 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .brand h1 {
@@ -224,10 +225,9 @@ select:focus {
 }
 
 .tab.active {
-  border-color: var(--lime);
-  color: var(--lime);
-  background: var(--lime-glow);
-  box-shadow: 0 0 0 1px rgba(200, 245, 66, 0.2);
+  border-color: transparent;
+  color: var(--text);
+  background: var(--border);
 }
 
 .header-right {
@@ -291,44 +291,80 @@ select:focus {
   cursor: pointer;
 }
 
-.mode-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--orange-dim);
-  background: rgba(232, 160, 32, 0.08);
+/* RPC status chip: orange for public, lime for dedicated, dim while unknown. */
+.rpc-chip.rpc-public {
   color: var(--orange);
-  font-size: 11px;
-  font-weight: 700;
+}
+
+.rpc-chip.rpc-public .dot {
+  background: var(--orange);
+  box-shadow: none;
+}
+
+.rpc-chip.rpc-dedicated .dot {
+  box-shadow: none;
+}
+
+.rpc-chip.rpc-unknown .dot {
+  background: var(--text-dim);
+  box-shadow: none;
+}
+
+/* Segmented SHADOW / PAPER / LIVE switch; the active option takes the mode color. */
+.mode-switch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.mode-opt {
+  border: none;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
   font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
   letter-spacing: 0.04em;
 }
 
-.mode-btn.live {
-  border-color: var(--red);
-  background: rgba(232, 90, 74, 0.12);
-  color: var(--red);
+.mode-opt:hover {
+  color: var(--text);
 }
 
-.mode-btn .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.mode-opt.active {
+  color: #110f0c;
+  cursor: default;
 }
 
-.avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 1px solid var(--lime-dim);
-  background: var(--lime-glow);
-  color: var(--lime);
-  display: grid;
-  place-items: center;
+.mode-opt-shadow.active {
+  background: var(--tan);
+}
+
+.mode-opt-paper.active {
+  background: var(--blue);
+}
+
+.mode-opt-live.active {
+  background: var(--red);
+}
+
+.header-btn {
+  padding: 6px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
   font-size: 12px;
+  font-weight: 600;
+}
+
+.header-btn:hover {
+  border-color: var(--tan);
 }
 
 /* Main layout */
@@ -1587,10 +1623,6 @@ table.screen tr:hover td {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.cred-chip {
-  cursor: pointer;
-  font-size: 11px;
-}
 .field input[type='password'],
 .field > input {
   width: 100%;
@@ -1598,9 +1630,9 @@ table.screen tr:hover td {
 
 
 .wallet-btn-wrap .wallet-adapter-button {
-  height: 32px;
-  font-size: 12px;
-  border-radius: 999px;
+  height: 30px;
+  font-size: 11px;
+  border-radius: 7px;
   background: #1a1f18;
   color: var(--lime, #b8ff3c);
   border: 1px solid rgba(184, 255, 60, 0.35);
@@ -1621,13 +1653,6 @@ table.screen tr:hover td {
 .mint-safety-list .pos { color: var(--lime, #b8ff3c); }
 .mint-safety-list .neg { color: var(--orange, #ff8a3d); }
 
-.mode-btn.paper {
-  border-color: #6ecbff;
-  color: #6ecbff;
-}
-.mode-btn.paper .dot {
-  background: #6ecbff;
-}
 .mock-data-banner {
   margin: 0 0 10px;
   padding: 8px 12px;

@@ -7,6 +7,7 @@ import { DecisionLog } from './components/DecisionLog';
 import { DemoBanner } from './components/DemoBanner';
 import { GateFunnel } from './components/GateFunnel';
 import { Header } from './components/Header';
+import type { RpcKind } from './components/Header';
 import { MetricCards } from './components/MetricCards';
 import { ModeBanner } from './components/ModeBanner';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
@@ -25,6 +26,7 @@ import {
   LIVE_POSITIONS_STORAGE_KEY,
 } from './positions';
 import { fetchHealth } from './api';
+import type { HealthResponse } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
 import { isPublicSolanaRpc, makeConnection } from './solana/constants';
 import { hasLocalToken } from './localToken';
@@ -54,7 +56,6 @@ export default function App() {
   const [chain, setChain] = useState<Chain>('SOL');
   const [mode, setMode] = useState<TradeMode>('SHADOW');
   const [clock, setClock] = useState(utcClock);
-  const [latency, setLatency] = useState(233);
   const [buyAmount, setBuyAmount] = useState(0.01);
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
   const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
@@ -62,7 +63,7 @@ export default function App() {
   const [buyToken, setBuyToken] = useState<ScreenToken | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credOpen, setCredOpen] = useState(false);
-  const [liveReady, setLiveReady] = useState(false);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [command, setCommand] = useState(DEFAULT_TRENDING_CMD);
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
@@ -93,17 +94,14 @@ export default function App() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setClock(utcClock());
-      setLatency(140 + Math.floor(Math.random() * 120));
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
     void fetchHealth()
-      .then((h) => {
-        setLiveReady(h.liveReady);
-      })
-      .catch(() => setLiveReady(false));
+      .then(setHealth)
+      .catch(() => setHealth(null));
   }, []);
 
   useEffect(() => {
@@ -126,6 +124,10 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [reconcileTrades]);
+
+  const rpcKind: RpcKind = health === null
+    ? 'unknown'
+    : health.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '') ? 'public' : 'dedicated';
 
   const visiblePositions = positions.filter(p => mode === 'SHADOW'
     ? p.demo
@@ -156,13 +158,13 @@ export default function App() {
   const handleMode = async (m: TradeMode) => {
     if (m === 'LIVE' || m === 'PAPER') {
       if (!hasLocalToken()) {
-        showToast('Paste GMGN_LOCAL_TOKEN from server/.env in Credentials');
+        showToast('Paste GMGN_LOCAL_TOKEN from server/.env in Settings');
         setCredOpen(true);
         return;
       }
       try {
         const h = await fetchHealth();
-        setLiveReady(h.liveReady);
+        setHealth(h);
         const solLive = Boolean(h.solLiveEnabled ?? h.liveEnabled);
         if (!solLive) {
           showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
@@ -303,7 +305,7 @@ export default function App() {
         return;
       }
       if (!hasLocalToken()) {
-        showToast('Paste GMGN_LOCAL_TOKEN in Credentials first');
+        showToast('Paste GMGN_LOCAL_TOKEN in Settings first');
         setCredOpen(true);
         return;
       }
@@ -366,9 +368,8 @@ export default function App() {
         mode={mode}
         onMode={(m) => void handleMode(m)}
         clock={clock}
-        latency={latency}
-        liveReady={liveReady}
-        onOpenCredentials={() => setCredOpen(true)}
+        rpc={rpcKind}
+        onOpenSettings={() => setCredOpen(true)}
       />
 
       <main className="main">
@@ -454,7 +455,9 @@ export default function App() {
       <CredentialsPanel
         open={credOpen}
         onClose={() => setCredOpen(false)}
-        onReadyChange={(ready) => setLiveReady(ready)}
+        onReadyChange={() => {
+          void fetchHealth().then(setHealth).catch(() => setHealth(null));
+        }}
       />
       <SettingsModal
         open={settingsOpen}

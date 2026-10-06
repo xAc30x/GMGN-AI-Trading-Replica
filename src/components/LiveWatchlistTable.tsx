@@ -72,7 +72,7 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode }: Prop
 
   const refresh = useCallback(async () => {
     if (!hasLocalToken()) {
-      setErr('Paste GMGN_LOCAL_TOKEN in Credentials to scan the watchlist');
+      setErr('Paste GMGN_LOCAL_TOKEN in Settings to scan the watchlist');
       return;
     }
     const list = loadWatchlist();

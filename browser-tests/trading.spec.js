@@ -272,10 +272,11 @@ async function openLiveTrade(page, openBuy = true) {
   await page.goto('/');
   await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
   page.on('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
-  await expect(page.getByRole('button', { name: /MODE PAPER/ })).toBeVisible();
-  await page.getByRole('button', { name: /MODE PAPER/ }).click();
-  await expect(page.getByRole('button', { name: /MODE LIVE/ })).toBeVisible();
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: 'PAPER' }).click();
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  await expect(modes.getByRole('button', { name: 'LIVE' })).toHaveAttribute('aria-pressed', 'true');
   if (!openBuy) return;
   await page.getByRole('button', { name: /BUY 0.01 SOL/ }).click();
   await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toBeVisible();
@@ -382,8 +383,8 @@ test('paper positions open without a wallet, survive reload, and close without b
   await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
   page.on('dialog', dialog => dialog.accept());
   await page.goto('/');
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
-  await expect(page.getByRole('button', { name: /MODE PAPER/ })).toBeVisible();
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await expect(page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
   const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · PAPER' }) });
   await discovery.getByRole('row').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
   await page.getByRole('checkbox', { name: /I understand PAPER/ }).check({ force: true });
@@ -392,7 +393,7 @@ test('paper positions open without a wallet, survive reload, and close without b
   await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
   await expect(research.getByText('0.012049 SOL', { exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
   await research.getByRole('button', { name: 'Close paper' }).click();
   await expect(research.getByText('manual', { exact: true })).toBeVisible();
@@ -411,7 +412,7 @@ test('research controls persist pauses and clearly separate virtual comparison f
   const counts = await installApiFixtures(page, { discovery: true });
   await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
   page.on('dialog', dialog => dialog.accept());
-  await page.goto('/'); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.goto('/'); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   const panel = page.getByRole('region', { name: 'Research automation', exact: true });
   await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Start paper comparison', exact: true }).click();
@@ -420,7 +421,7 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Pause background scans' }).click();
   await expect(panel.getByRole('button', { name: 'Start paper comparison' })).toBeDisabled();
-  await page.reload(); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.reload(); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
@@ -438,7 +439,18 @@ test('mode banner always states the active mode and what it can do', async ({ pa
   const banner = page.getByRole('status', { name: 'Trading mode SHADOW' });
   await expect(banner).toContainText('nothing touches a chain');
   await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'SHADOW');
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   await expect(page.getByRole('status', { name: 'Trading mode PAPER' })).toContainText('nothing is signed or broadcast');
   await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'PAPER');
+});
+
+test('header reports the RPC type from server status and offers one mode switch', async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto('/');
+  const header = page.locator('header');
+  await expect(header.getByText('DEDICATED RPC', { exact: true })).toBeVisible();
+  await expect(header.getByText(/LAT \d+ms/)).toHaveCount(0);
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await expect(modes.getByRole('button')).toHaveText(['SHADOW', 'PAPER', 'LIVE ⊘']);
+  await expect(modes.getByRole('button', { name: 'SHADOW' })).toHaveAttribute('aria-pressed', 'true');
 });

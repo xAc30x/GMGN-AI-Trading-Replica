@@ -412,7 +412,60 @@ export default function App() {
       />
 
       <main className="main">
-        {tab === 'token' ? (
+        {tab === 'wallet' ? (
+          <WalletEval />
+        ) : tab === 'research' ? (
+          <div className="research-tab">
+            {mode !== 'SHADOW' && chain === 'SOL' ? (
+              <>
+                <ResearchAutomationPanel />
+                <ResearchPanel version={paperVersion} />
+              </>
+            ) : (
+              <section className="panel">
+                <p className="help">
+                  Background research runs on the server with real Solana data. Switch to PAPER on the SOL chain to view
+                  and control it (it needs the access token from Settings).
+                </p>
+              </section>
+            )}
+          </div>
+        ) : mode !== 'SHADOW' && chain === 'SOL' ? (
+          <div className="workspace">
+            <div className="ws-col ws-discover">
+              <DiscoveryFeed
+                buyAmount={buyAmount}
+                mode={mode}
+                onBuy={setBuyToken}
+                onWatch={(mint, symbol) => {
+                  try {
+                    addWatchMint(mint, symbol);
+                    setWatchVersion(v => v + 1);
+                    showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
+                  } catch { showToast('Watchlist storage unavailable'); }
+                }}
+              />
+            </div>
+            <div className="ws-col ws-center">
+              <LiveWatchlistTable
+                key={watchVersion}
+                buyAmount={buyAmount}
+                onBuyAmount={setBuyAmount}
+                onBuy={setBuyToken}
+                mode={mode}
+              />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
+              <DecisionLog logs={logs.filter(l => l.category === 'live' || l.category === 'paper')} />
+            </div>
+            <aside className="ws-col ws-inspector panel" aria-label="Inspector">
+              <div className="panel-head">
+                <h2>Inspector</h2>
+              </div>
+              <p className="help">Select a token in Discover or Watchlist to see its safety checks and trade it here.</p>
+            </aside>
+          </div>
+        ) : (
           <div className="token-layout">
             <div className="col-main">
               {mode === 'SHADOW' && <MetricCards
@@ -439,30 +492,14 @@ export default function App() {
                   mode={mode}
                 />
               ) : (
-                <>
-                  {chain === 'SOL' && <ResearchAutomationPanel />}
-                  {chain === 'SOL' && <DiscoveryFeed
-                    buyAmount={buyAmount}
-                    mode={mode}
-                    onBuy={setBuyToken}
-                    onWatch={(mint, symbol) => {
-                      try {
-                        addWatchMint(mint, symbol);
-                        setWatchVersion(v => v + 1);
-                        showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
-                      } catch { showToast('Watchlist storage unavailable'); }
-                    }}
-                  />}
-                  <LiveWatchlistTable
-                    key={watchVersion}
-                    buyAmount={buyAmount}
-                    onBuyAmount={setBuyAmount}
-                    onBuy={setBuyToken}
-                    mode={mode}
-                  />
-                </>
+                <LiveWatchlistTable
+                  key={watchVersion}
+                  buyAmount={buyAmount}
+                  onBuyAmount={setBuyAmount}
+                  onBuy={setBuyToken}
+                  mode={mode}
+                />
               )}
-              {mode !== 'SHADOW' && chain === 'SOL' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
             <div className="col-side">
@@ -476,8 +513,6 @@ export default function App() {
               />}
             </div>
           </div>
-        ) : (
-          <WalletEval />
         )}
       </main>
 

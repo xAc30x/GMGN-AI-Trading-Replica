@@ -125,14 +125,12 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode }: Prop
   const rows = watch.map((w) => toScreenToken(w, scans[w.mint]));
 
   return (
-    <section className={`panel ${scanning ? 'scanning' : ''}`}>
-      <div className="mock-data-banner" style={{ borderColor: 'rgba(110,203,255,0.45)', color: '#6ecbff' }}>
-        Live watchlist — each row is a real on-chain + RugCheck/GoPlus scan (not mock). Max 8 mints.
-        {scannedAt && <> · last scan {new Date(scannedAt).toLocaleTimeString()}</>}
-      </div>
-
+    <section className={`panel ${scanning ? 'scanning' : ''}`} aria-labelledby="watchlist-title">
       <div className="panel-head">
-        <h2>Live Watchlist · {mode}</h2>
+        <h2 id="watchlist-title">Watchlist</h2>
+        <span className="panel-sub" title="Each row is a real on-chain + RugCheck/GoPlus scan">
+          {watch.length}/8 · {scannedAt ? `scanned ${new Date(scannedAt).toLocaleTimeString()}` : 'not scanned yet'}
+        </span>
         <div className="spacer" />
         <div className="buy-amount-ctrl">
           BUY

@@ -352,11 +352,11 @@ test('uncertain send reconciles by signature and prevents a duplicate submission
 test('discovery screens tokens, adds a watch entry and opens the existing guarded buy flow', async ({ page }) => {
   const counts = await installApiFixtures(page, { discovery: true });
   await openLiveTrade(page, false);
-  const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · LIVE' }) });
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
   await expect(discovery.getByText('FOUND', { exact: true })).toBeVisible();
-  const blocked = discovery.getByRole('row').filter({ hasText: 'BLOCKEDTOKEN' });
+  const blocked = discovery.getByRole('listitem').filter({ hasText: 'BLOCKEDTOKEN' });
   await expect(blocked.getByRole('button', { name: /BUY/ })).toHaveCount(0);
-  const found = discovery.getByRole('row').filter({ hasText: 'FOUND' });
+  const found = discovery.getByRole('listitem').filter({ hasText: 'FOUND' });
   await found.getByRole('button', { name: '+ Watch' }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.watchlist.v1'))[0].symbol)).toBe('FOUND');
   await found.getByRole('button', { name: /BUY/ }).click();
@@ -394,8 +394,8 @@ test('paper positions open without a wallet, survive reload, and close without b
   await page.goto('/');
   await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   await expect(page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
-  const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · PAPER' }) });
-  await discovery.getByRole('row').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
+  await discovery.getByRole('listitem').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
   await page.getByRole('checkbox', { name: /I understand PAPER/ }).check({ force: true });
   await page.getByRole('button', { name: 'Open paper position', exact: true }).click();
   const research = page.locator('.research-panel').filter({ has: page.getByRole('heading', { name: 'Paper portfolio & scan history', exact: true }) });
@@ -422,6 +422,7 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
   page.on('dialog', dialog => dialog.accept());
   await page.goto('/'); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('button', { name: 'Research', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Research automation', exact: true });
   await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Start paper comparison', exact: true }).click();
@@ -431,12 +432,14 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await panel.getByRole('button', { name: 'Pause background scans' }).click();
   await expect(panel.getByRole('button', { name: 'Start paper comparison' })).toBeDisabled();
   await page.reload(); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('button', { name: 'Research', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /safety-feed-v1/ })).toBeVisible();
-  await expect(page.getByRole('cell', { name: /^watch · 20\/100/ })).toBeVisible();
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
+  await page.getByRole('button', { name: 'Trade', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Discover', exact: true }).getByText('watch · 20/100', { exact: true })).toBeVisible();
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
 });
 

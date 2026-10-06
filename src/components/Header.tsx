@@ -56,6 +56,14 @@ export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, o
         </button>
         <button
           type="button"
+          className={`tab ${tab === 'research' ? 'active' : ''}`}
+          aria-current={tab === 'research' ? 'page' : undefined}
+          onClick={() => onTab('research')}
+        >
+          Research
+        </button>
+        <button
+          type="button"
           className={`tab ${tab === 'wallet' ? 'active' : ''}`}
           aria-current={tab === 'wallet' ? 'page' : undefined}
           onClick={() => onTab('wallet')}

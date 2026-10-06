@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { fetchSolQuote, type HealthResponse, type SolQuoteResponse } from '../api';
 import { DEFAULT_SLIPPAGE_BPS, MAX_SLIPPAGE_BPS } from '../solana/constants';
-import { signAndSendSolSwap } from '../solana/sendJupiterSwap';
+import { signAndSendSolSwap, type CheckedSwap } from '../solana/sendJupiterSwap';
 import type { TradeGate } from '../tradeGate';
-import { CHECKED_BEFORE_WALLET, quotePreview } from '../txPreview';
+import { CHECKED_BEFORE_WALLET, checkedRows, quotePreview } from '../txPreview';
 import { HoldButton } from './HoldButton';
 
 export interface LiveBought {
@@ -48,6 +48,7 @@ export function LiveSend({ mint, symbol, decimals, amount, health, gate, onBough
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [sendErr, setSendErr] = useState<string | null>(null);
+  const [checked, setChecked] = useState<CheckedSwap | null>(null);
 
   // Quote only when the inspector's own rules allow trading; never for blocked or held tokens.
   useEffect(() => {
@@ -82,13 +83,21 @@ export function LiveSend({ mint, symbol, decimals, amount, health, gate, onBough
     const amountSol = amount;
     setSending(true);
     setSendErr(null);
+    setChecked(null);
     setStatus('Building and checking the transaction, then opening your wallet…');
     try {
-      const r = await signAndSendSolSwap({ wallet, outputMint: mint, symbol, amountSol, slippageBps });
+      const r = await signAndSendSolSwap({
+        wallet, outputMint: mint, symbol, amountSol, slippageBps,
+        onValidated: (c) => {
+          setChecked(c);
+          setStatus('Checks passed. Approve or reject in your wallet…');
+        },
+      });
       setStatus(`Confirmed: ${r.signature.slice(0, 12)}…`);
       onBought({ signature: r.signature, explorerUrl: r.explorerUrl, walletAddress, amountSol });
     } catch (e) {
       setStatus(null);
+      setChecked(null);
       setSendErr(e instanceof Error ? e.message : String(e));
       onReconcile();
     } finally {
@@ -98,7 +107,7 @@ export function LiveSend({ mint, symbol, decimals, amount, health, gate, onBough
 
   return (
     <>
-      {current && (
+      {current && !checked && (
         <section className="tx-preview" aria-label="What your wallet will be asked to sign">
           <h4>What your wallet will be asked to sign</h4>
           <dl>
@@ -116,6 +125,23 @@ export function LiveSend({ mint, symbol, decimals, amount, health, gate, onBough
           <ul className="tx-checks">
             {CHECKED_BEFORE_WALLET.map((c) => <li key={c}>{c}</li>)}
           </ul>
+        </section>
+      )}
+      {checked && (
+        <section className="tx-preview tx-checked" aria-label="Checked transaction">
+          <h4>✓ Checked transaction</h4>
+          <dl>
+            {checkedRows(checked, symbol, decimals).map((r) => (
+              <div key={r.label}>
+                <dt>{r.label}</dt>
+                <dd>{r.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <ul className="tx-checks is-passed">
+            {CHECKED_BEFORE_WALLET.map((c) => <li key={c}>{c}</li>)}
+          </ul>
+          <p className="help">These are the values in the transaction your wallet is showing. If they differ, reject it.</p>
         </section>
       )}
       {quoteErr && gate.can && <div className="cred-msg err">Quote: {quoteErr}</div>}

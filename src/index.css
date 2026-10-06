@@ -2759,6 +2759,11 @@ table.screen tr:hover td {
   color: var(--text-muted);
 }
 
+/* Step 8c: the real transaction passed the local checks; lime means "check passed". */
+.tx-checked { border-color: var(--lime-dim); }
+.tx-checked h4 { color: var(--lime); }
+.tx-checks.is-passed { list-style: '✓ '; color: var(--text); }
+
 .hold-btn {
   position: relative;
   overflow: hidden;

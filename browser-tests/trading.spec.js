@@ -93,6 +93,11 @@ async function installWallet(page) {
       off: () => undefined,
       signTransaction: async transaction => {
         window.__walletSignCalls += 1;
+        // Like a real wallet popup, stay open briefly and note whether the checked facts are on screen meanwhile.
+        for (let i = 0; i < 20 && !document.querySelector('[aria-label="Checked transaction"]'); i += 1) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        window.__checkedShownDuringSign = Boolean(document.querySelector('[aria-label="Checked transaction"]'));
         transaction.signatures[0] = new Uint8Array(64).fill(7);
         return transaction;
       },
@@ -744,6 +749,13 @@ test('holding the LIVE send button signs through the existing validated flow, th
   assert.equal(counts.builds, 1);
   assert.equal(counts.sends, 1);
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 1);
+  // The real, checked transaction values were on screen while the wallet was being asked to sign.
+  assert.equal(await page.evaluate(() => window.__checkedShownDuringSign), true);
+  const checked = trade.getByRole('region', { name: 'Checked transaction' });
+  await expect(checked).toContainText('You send0.01 SOL');
+  await expect(checked).toContainText('Slippage limit');
+  await expect(checked).toContainText('Network fee (RPC estimate)');
+  await expect(trade.getByRole('region', { name: 'What your wallet will be asked to sign' })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]')[0]?.status)).toBe('confirmed');
   await expect(trade.getByRole('button', { name: 'Already holding · 1 position per mint' })).toBeDisabled();
   await expect(page.getByRole('contentinfo', { name: 'Status bar' })).toContainText('SOL wallet swap: TEST · 0.01 SOL');
@@ -761,4 +773,6 @@ test('LIVE hold-to-send stops before the wallet when the built transaction fails
   assert.equal(counts.builds, 1);
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
   assert.equal(counts.sends, 0);
+  // A transaction that failed the checks never shows as checked.
+  await expect(trade.getByRole('region', { name: 'Checked transaction' })).toHaveCount(0);
 });

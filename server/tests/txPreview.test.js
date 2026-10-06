@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../../src/txPreview.ts', import.meta.url), 
 const { outputText } = ts.transpileModule(source, { compilerOptions: {
   target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext,
 } });
-const { formatAtomic, quotePreview } =
+const { checkedRows, formatAtomic, quotePreview } =
   await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
 
 test('atomic amounts format exactly with the mint decimals', () => {
@@ -38,4 +38,25 @@ test('quote preview lists what is sent, received, the slippage limit and price i
 test('quote preview leaves out values the quote did not provide', () => {
   const rows = quotePreview({ amountSol: 0.02, symbol: 'X', decimals: 6, slippageBps: 300, quote: { ok: true } });
   assert.deepEqual(rows.map(r => r.label), ['You send', 'Slippage limit']);
+});
+
+test('checked transaction rows show the checked amounts and list the two fees separately', () => {
+  const rows = checkedRows({ inputAmount: '10000000', minimumOutput: '4086720000', slippageBps: 100,
+    priorityFeeLamports: '12500', transactionFeeLamports: 5000 }, 'TEST', 6);
+  assert.deepEqual(rows.map(r => [r.label, r.value]), [
+    ['You send', '0.01 SOL'],
+    ['Minimum receive', '≥ 4,086.72 TEST'],
+    ['Slippage limit', '1.00%'],
+    ['Network fee (RPC estimate)', '0.000005 SOL'],
+    ['Priority fee (in transaction)', '0.0000125 SOL'],
+  ]);
+});
+
+test('checked transaction rows skip values that are missing or malformed instead of inventing them', () => {
+  const rows = checkedRows({ inputAmount: '', minimumOutput: 'x', slippageBps: 50,
+    priorityFeeLamports: '0', transactionFeeLamports: Number.NaN }, 'TEST', 6);
+  assert.deepEqual(rows.map(r => [r.label, r.value]), [
+    ['Slippage limit', '0.50%'],
+    ['Priority fee (in transaction)', '0 SOL'],
+  ]);
 });

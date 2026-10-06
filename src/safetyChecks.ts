@@ -44,9 +44,13 @@ export function checkGroup(id: string): CheckGroupId {
   return 'other';
 }
 
-/** A failed check blocks. A passed check is a warning when the server marked it as one. */
+/**
+ * A failed check blocks, except one the server itself rates only a warning (a single rug provider
+ * being unavailable; the server blocks only when both are down). A passed check is a warning when
+ * the server marked it as one.
+ */
 export function checkStatus(c: MintSafetyCheck): CheckStatus {
-  if (!c.ok) return 'fail';
+  if (!c.ok) return c.level === 'warn' ? 'warn' : 'fail';
   if (c.level === 'warn' || /^warn:/i.test(c.detail)) return 'warn';
   return 'pass';
 }
@@ -80,4 +84,75 @@ export function safetyVerdict(input: {
   if (!input.ok || (input.blockers?.length ?? 0) > 0) return 'BLOCKED';
   const anyWarn = (input.warnings?.length ?? 0) > 0 || (input.checks ?? []).some((c) => checkStatus(c) !== 'pass');
   return anyWarn ? 'REVIEW' : 'PASS';
+}
+
+const SHORT_LABELS: Record<string, string> = {
+  format: 'format', exists: 'exists', spl: 'SPL', program: 'program', parse: 'parse', rpc: 'RPC',
+  freezeAuthority: 'freeze', mintAuthority: 'mint auth', decimals: 'decimals', supply: 'supply',
+  rugcheck: 'provider', rugScan: 'scan', rugged: 'rugged', rugScore: 'score', liquidity: 'liquidity',
+  topHolder: 'top holder', risk: 'risks', goplus: 'provider',
+};
+
+/** RugCheck's named risks vary per token, so the matrix folds them into one "risks" column. */
+function matrixColumnId(id: string): string {
+  return id.startsWith('risk:') ? 'risk' : id;
+}
+
+export interface MatrixColumn {
+  id: string;
+  group: CheckGroupId;
+  label: string;
+}
+
+export interface MatrixRow {
+  mint: string;
+  symbol: string;
+  /** Worst status per column; missing when that check did not run for this token. */
+  cells: Record<string, CheckStatus>;
+  verdict: Verdict;
+  checkCount: number;
+}
+
+export interface WhyItem {
+  mint: string;
+  symbol: string;
+  group: string;
+  status: CheckStatus;
+  detail: string;
+}
+
+const RANK: Record<CheckStatus, number> = { pass: 0, warn: 1, fail: 2 };
+
+/**
+ * Every check for every scanned token in one table. Columns are the union of checks the server
+ * actually ran, in provider order; nothing is invented for checks that did not run.
+ */
+export function buildMatrix(items: { mint: string; symbol: string; scan: WatchlistScanItem }[]): {
+  columns: MatrixColumn[];
+  rows: MatrixRow[];
+  why: WhyItem[];
+} {
+  const order: CheckGroupId[] = ['onchain', 'rugcheck', 'goplus', 'other'];
+  const seen = new Map<string, MatrixColumn>();
+  const rows: MatrixRow[] = [];
+  const why: WhyItem[] = [];
+  for (const { mint, symbol, scan } of items) {
+    const cells: Record<string, CheckStatus> = {};
+    for (const c of scan.checks) {
+      const col = matrixColumnId(c.id);
+      const group = checkGroup(c.id);
+      if (!seen.has(col)) {
+        seen.set(col, { id: col, group, label: SHORT_LABELS[col] ?? col.replace(/^goplus:/, '').replace(/_/g, ' ') });
+      }
+      const status = checkStatus(c);
+      if (!(col in cells) || RANK[status] > RANK[cells[col]]) cells[col] = status;
+      if (status !== 'pass') {
+        why.push({ mint, symbol, group: GROUP_LABELS[group], status, detail: c.detail.replace(/^warn:\s*/i, '') });
+      }
+    }
+    rows.push({ mint, symbol, cells, verdict: safetyVerdict(scan), checkCount: scan.checks.length });
+  }
+  const columns = [...seen.values()].sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
+  why.sort((a, b) => RANK[b.status] - RANK[a.status]);
+  return { columns, rows, why };
 }

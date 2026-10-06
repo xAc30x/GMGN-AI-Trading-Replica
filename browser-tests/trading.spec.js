@@ -689,3 +689,25 @@ test('settings is a setup checklist that shows what blocks each mode', async ({ 
   await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), null);
 });
+
+test('watchlist matrix view shows every check per token and lists every warning', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true, checks: sampleChecks });
+  await installWallet(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  const watchlist = page.getByRole('region', { name: 'Watchlist' });
+  await watchlist.getByRole('group', { name: 'Watchlist view' }).getByRole('button', { name: 'Matrix' }).click();
+  const matrix = watchlist.getByRole('table', { name: 'Safety matrix' });
+  const row = matrix.getByRole('row').filter({ hasText: 'TEST' });
+  // One cell per check the fixture scan returned, plus the token and verdict cells.
+  await expect(row.getByRole('cell')).toHaveCount(sampleChecks.length + 1);
+  await expect(row).toContainText('REVIEW');
+  await expect(row.getByLabel('mintable: warn')).toBeVisible();
+  await expect(watchlist.getByRole('list', { name: 'Warnings and failures' })).toContainText('GoPlus mintable=true');
+
+  await row.getByRole('button', { name: 'TEST' }).click();
+  await expect(page.getByRole('complementary', { name: 'Inspector' }).getByRole('heading', { name: 'TEST' })).toBeVisible();
+  await watchlist.getByRole('button', { name: 'Table' }).click();
+  await expect(watchlist.getByRole('button', { name: 'Inspect TEST' })).toBeVisible();
+});

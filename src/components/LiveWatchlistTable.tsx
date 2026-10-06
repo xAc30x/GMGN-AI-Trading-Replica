@@ -14,6 +14,7 @@ import {
 } from '../watchlist';
 import type { InspectTarget } from '../safetyChecks';
 import { SafetyPips } from './SafetyChecks';
+import { SafetyMatrix } from './SafetyMatrix';
 
 interface Props {
   buyAmount: number;
@@ -75,6 +76,7 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, select
   const [mintInput, setMintInput] = useState('');
   const [symInput, setSymInput] = useState('');
   const [scannedAt, setScannedAt] = useState<string | null>(null);
+  const [view, setView] = useState<'table' | 'matrix'>('table');
 
   const refresh = useCallback(async () => {
     if (!hasLocalToken()) {
@@ -139,6 +141,14 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, select
           {watch.length}/8 · {scannedAt ? `scanned ${new Date(scannedAt).toLocaleTimeString()}` : 'not scanned yet'}
         </span>
         <div className="spacer" />
+        <div className="seg" role="group" aria-label="Watchlist view">
+          <button type="button" aria-pressed={view === 'table'} onClick={() => setView('table')}>
+            Table
+          </button>
+          <button type="button" aria-pressed={view === 'matrix'} onClick={() => setView('matrix')}>
+            Matrix
+          </button>
+        </div>
         <div className="buy-amount-ctrl">
           BUY
           <input
@@ -178,86 +188,101 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, select
 
       {err && <div className="cred-msg err">{err}</div>}
 
-      <div className="table-wrap">
-        <table className="screen">
-          <thead>
-            <tr>
-              <th>Token</th>
-              <th>Mint</th>
-              <th>Safety</th>
-              <th>Score / Liq</th>
-              <th>Decision</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
+      {view === 'matrix' ? (
+        <SafetyMatrix
+          items={watch.flatMap((w) => {
+            const scan = scans[w.mint];
+            return scan ? [{ mint: w.mint, symbol: w.symbol || shortMint(w.mint), scan }] : [];
+          })}
+          unscanned={watch.filter((w) => !scans[w.mint]).length}
+          selectedMint={selectedMint}
+          onSelect={onSelect && ((mint) => {
+            const row = rows.find((r) => r.address === mint);
+            if (row) onSelect({ mint, symbol: row.symbol, source: 'watchlist', scan: scans[mint], buyToken: row });
+          })}
+        />
+      ) : (
+        <div className="table-wrap">
+          <table className="screen">
+            <thead>
               <tr>
-                <td colSpan={6}>
-                  <div className="help">Watchlist empty — add a mint to scan.</div>
-                </td>
+                <th>Token</th>
+                <th>Mint</th>
+                <th>Safety</th>
+                <th>Score / Liq</th>
+                <th>Decision</th>
+                <th></th>
               </tr>
-            )}
-            {rows.map((t) => {
-              const scan = scans[t.address || ''];
-              return (
-                <tr key={t.id} className={selectedMint === t.address ? 'is-selected' : undefined}>
-                  <td>
-                    {onSelect ? (
-                      <button
-                        type="button"
-                        className="token-cell row-select"
-                        aria-pressed={selectedMint === t.address}
-                        aria-label={`Inspect ${t.symbol}`}
-                        onClick={() => onSelect({ mint: t.address || t.id, symbol: t.symbol, source: 'watchlist', scan, buyToken: t })}
-                      >
-                        <span className="sym">{t.symbol}</span>
-                        <span className="meta">{t.age}</span>
-                      </button>
-                    ) : (
-                      <div className="token-cell">
-                        <span className="sym">{t.symbol}</span>
-                        <span className="meta">{t.age}</span>
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <code title={t.address}>{t.mintShort}</code>
-                  </td>
-                  <td className={t.safeOk ? 'safe-ok' : 'safe-bad'}>
-                    {scan && scan.checks.length > 0 && <SafetyPips checks={scan.checks} />}
-                    <div>{t.safe}</div>
-                  </td>
-                  <td>
-                    {t.timing}
-                    {scan?.warnings && scan.warnings.length > 0 && (
-                      <div className="help">⚠ {scan.warnings[0]}</div>
-                    )}
-                  </td>
-                  <td>
-                    {t.decision === 'buy' ? (
-                      <button type="button" className="buy-btn" onClick={() => onBuy(t)}>
-                        ⚡ BUY {buyAmount} SOL
-                      </button>
-                    ) : (
-                      <span className="blocked-btn">BLOCKED</span>
-                    )}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      onClick={() => onRemove(t.address || t.id)}
-                    >
-                      Remove
-                    </button>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <div className="help">Watchlist empty — add a mint to scan.</div>
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              )}
+              {rows.map((t) => {
+                const scan = scans[t.address || ''];
+                return (
+                  <tr key={t.id} className={selectedMint === t.address ? 'is-selected' : undefined}>
+                    <td>
+                      {onSelect ? (
+                        <button
+                          type="button"
+                          className="token-cell row-select"
+                          aria-pressed={selectedMint === t.address}
+                          aria-label={`Inspect ${t.symbol}`}
+                          onClick={() => onSelect({ mint: t.address || t.id, symbol: t.symbol, source: 'watchlist', scan, buyToken: t })}
+                        >
+                          <span className="sym">{t.symbol}</span>
+                          <span className="meta">{t.age}</span>
+                        </button>
+                      ) : (
+                        <div className="token-cell">
+                          <span className="sym">{t.symbol}</span>
+                          <span className="meta">{t.age}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <code title={t.address}>{t.mintShort}</code>
+                    </td>
+                    <td className={t.safeOk ? 'safe-ok' : 'safe-bad'}>
+                      {scan && scan.checks.length > 0 && <SafetyPips checks={scan.checks} />}
+                      <div>{t.safe}</div>
+                    </td>
+                    <td>
+                      {t.timing}
+                      {scan?.warnings && scan.warnings.length > 0 && (
+                        <div className="help">⚠ {scan.warnings[0]}</div>
+                      )}
+                    </td>
+                    <td>
+                      {t.decision === 'buy' ? (
+                        <button type="button" className="buy-btn" onClick={() => onBuy(t)}>
+                          ⚡ BUY {buyAmount} SOL
+                        </button>
+                      ) : (
+                        <span className="blocked-btn">BLOCKED</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() => onRemove(t.address || t.id)}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

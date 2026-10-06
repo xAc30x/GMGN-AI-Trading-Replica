@@ -33,6 +33,7 @@ import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
 import { securityHeaders } from './securityHeaders.js';
+import { jsonErrorHandler, safeJsonResponses } from './errorSafety.js';
 import { authFailureGuard, requestRateLimit } from './rateLimit.js';
 import { assertTradeId, authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
@@ -547,6 +548,7 @@ app.disable('x-powered-by');
 // but only when the request itself comes from loopback, so remote clients cannot fake it.
 app.set('trust proxy', 'loopback');
 app.use(securityHeaders({ browserRpcUrl: process.env.VITE_SOLANA_RPC_URL }));
+app.use(safeJsonResponses());
 app.use(
   cors({
     origin: [VITE_ORIGIN, 'http://localhost:5173'],
@@ -1194,6 +1196,8 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.resolve(__dirname, '../dist'), { dotfiles: 'deny' }));
 }
+
+app.use(jsonErrorHandler());
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   loadSecretsFile(secretsFilePath());

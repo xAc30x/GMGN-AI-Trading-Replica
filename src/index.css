@@ -1320,6 +1320,9 @@ table.screen tr:hover td {
   border-radius: 8px;
 }
 
+.pos-item { flex-wrap: wrap; }
+.pos-item .sell-pcts { flex-basis: 100%; justify-content: flex-end; }
+
 .pos-item.alert {
   border-color: var(--orange-dim);
   background: rgba(232, 160, 32, 0.06);

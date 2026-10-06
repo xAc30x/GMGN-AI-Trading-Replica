@@ -7,7 +7,7 @@ import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
 import {
   addConfirmedBuy,
-  removeConfirmedPosition,
+  applyConfirmedClose,
   updateTradeAttempt,
   withWalletTrade,
   type TradeAttempt,
@@ -91,7 +91,7 @@ async function signSendBase64(
     await confirmSwap(connection, signature, tx.message.recentBlockhash, lastValidBlockHeight);
     const confirmed = updateTradeAttempt(attempt.id, { status: 'confirmed', error: undefined });
     if (confirmed?.side === 'buy') addConfirmedBuy(confirmed);
-    if (confirmed?.side === 'close') removeConfirmedPosition(confirmed.walletAddress, confirmed.mint);
+    if (confirmed?.side === 'close') applyConfirmedClose(confirmed);
     return { signature, explorerUrl: `https://solscan.io/tx/${signature}` };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -173,9 +173,10 @@ async function executeSolClose(args: {
   slippageBps: number;
 }): Promise<{ signature: string; explorerUrl: string; amountAtomic: string }> {
   const { wallet, inputMint, percent = 100, slippageBps } = args;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) throw new Error('Sell percent must be a whole number from 1 to 100');
   if (!wallet.publicKey) throw new Error('Connect a Solana wallet that can sign transactions');
   const walletAddress = wallet.publicKey.toBase58();
-  return withWalletTrade({ walletAddress, mint: inputMint, side: 'close', amountSol: 0, positionId: inputMint }, async (attempt) => {
+  return withWalletTrade({ walletAddress, mint: inputMint, side: 'close', amountSol: 0, percent, positionId: inputMint }, async (attempt) => {
     if (!wallet.signTransaction) throw new Error('Connected wallet cannot sign transactions');
     await requireMintSafe(inputMint);
     const bal = await getTokenBalanceAtomic(wallet.publicKey!, inputMint);

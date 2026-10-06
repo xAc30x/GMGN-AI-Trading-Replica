@@ -27,7 +27,9 @@ function associatedTokenAddress(owner, mint, program) {
   )[0];
 }
 
-function unsignedSwap({ unsafe = false } = {}) {
+/** A Jupiter-shaped swap. Defaults to the 0.01 SOL buy; `sell` builds token -> SOL for `sell.amount` tokens. */
+function unsignedSwap({ unsafe = false, sell = null } = {}) {
+  const [fromMint, toMint] = sell ? [outputMint, inputMint] : [inputMint, outputMint];
   let instructions;
   if (unsafe) {
     instructions = [SystemProgram.transfer({
@@ -43,18 +45,18 @@ function unsignedSwap({ unsafe = false } = {}) {
     data[13] = 100;
     data[14] = 0;
     data[15] = 1;
-    data.writeBigUInt64LE(10_000_000n, 16);
-    data.writeBigUInt64LE(10n, 24);
+    data.writeBigUInt64LE(sell ? BigInt(sell.amount) : 10_000_000n, 16);
+    data.writeBigUInt64LE(sell ? 5_000_000n : 10n, 24);
     data.writeUInt16LE(100, 32);
     data[34] = 0;
     instructions = [new TransactionInstruction({
       programId: jupiterProgram,
       keys: [
         { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-        { pubkey: associatedTokenAddress(wallet.publicKey, inputMint, tokenProgram), isSigner: false, isWritable: true },
-        { pubkey: associatedTokenAddress(wallet.publicKey, outputMint, tokenProgram), isSigner: false, isWritable: true },
-        { pubkey: inputMint, isSigner: false, isWritable: false },
-        { pubkey: outputMint, isSigner: false, isWritable: false },
+        { pubkey: associatedTokenAddress(wallet.publicKey, fromMint, tokenProgram), isSigner: false, isWritable: true },
+        { pubkey: associatedTokenAddress(wallet.publicKey, toMint, tokenProgram), isSigner: false, isWritable: true },
+        { pubkey: fromMint, isSigner: false, isWritable: false },
+        { pubkey: toMint, isSigner: false, isWritable: false },
         { pubkey: tokenProgram, isSigner: false, isWritable: false },
       ],
       data,
@@ -98,7 +100,8 @@ async function installWallet(page) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         window.__checkedShownDuringSign = Boolean(document.querySelector('[aria-label="Checked transaction"]'));
-        transaction.signatures[0] = new Uint8Array(64).fill(7);
+        // Each signing gets its own signature, as on chain (1st call = all 7s).
+        transaction.signatures[0] = new Uint8Array(64).fill(6 + window.__walletSignCalls);
         return transaction;
       },
     };
@@ -108,7 +111,7 @@ async function installWallet(page) {
 }
 
 async function installApiFixtures(page, scenario = {}) {
-  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, paperClosePercents: [], safetyChecks: 0 };
+  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, paperClosePercents: [], closeBuilds: [], safetyChecks: 0 };
   let paperPosition = null;
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
@@ -241,6 +244,16 @@ async function installApiFixtures(page, scenario = {}) {
         slippageBps: 100,
         inputMint: inputMint.toBase58(),
         outputMint: mintText,
+      } });
+    }
+    if (url.pathname === '/api/sol/close-tx') {
+      counts.closeBuilds.push(body.percent);
+      // Mirrors the server: the sold amount is that percent of the wallet balance (10 tokens).
+      const amount = String(BigInt(body.balanceAtomic) * BigInt(body.percent * 1000) / 100000n);
+      return route.fulfill({ json: {
+        ok: true, chain: 'sol', side: 'close', swapTransaction: unsignedSwap({ sell: { amount } }),
+        lastValidBlockHeight: 100, inAmount: amount, outAmount: '5000000', otherAmountThreshold: '4950000',
+        slippageBps: 100, inputMint: mintText, outputMint: inputMint.toBase58(), amountAtomic: amount,
       } });
     }
     if (url.pathname === '/api/sol/rpc') {
@@ -389,6 +402,33 @@ test('discovery screens tokens, adds a watch entry and opens the existing guarde
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
 });
 
+test('LIVE partial sell is wallet-signed, keeps the holding with a smaller cost, and 100% then closes it', async ({ page }) => {
+  const counts = await installApiFixtures(page);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  const holdings = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tracked holdings' }) });
+  const sell = holdings.getByRole('group', { name: 'Sell TEST' });
+  await expect(sell.getByRole('button')).toHaveText(['10%', '25%', '50%', '75%', '100%']);
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.positions.v1') || '[]'));
+
+  await sell.getByRole('button', { name: 'Sell 25%' }).click();
+  await expect(page.getByText(/SOL wallet sell 25% TEST · tx/).first()).toBeVisible({ timeout: 10_000 });
+  await expect.poll(async () => (await stored())[0]?.sizeSol).toBeCloseTo(0.0075, 9);
+  await expect(sell).toBeVisible();
+  const journal = await page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]'));
+  assert.deepEqual(journal.filter(a => a.side === 'close').map(a => [a.percent, a.status]), [[25, 'confirmed']]);
+
+  await sell.getByRole('button', { name: 'Sell 100%' }).click();
+  await expect(page.getByText(/SOL wallet close TEST · tx/).first()).toBeVisible({ timeout: 10_000 });
+  await expect.poll(async () => (await stored()).length).toBe(0);
+  await expect(sell).toHaveCount(0);
+
+  assert.deepEqual(counts.closeBuilds, [25, 100]);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 3);
+  assert.equal(counts.sends, 3);
+});
+
 test('holdings show cached valuation and hide zero balances without deleting trade history', async ({ page }) => {
   await page.clock.install();
   const scenario = { stale: true, zeroBalance: false };
@@ -403,7 +443,7 @@ test('holdings show cached valuation and hide zero balances without deleting tra
   await page.clock.runFor(16000);
   await expect(holdings.getByText('No balance · checking')).toBeVisible();
   await page.clock.runFor(16000);
-  await expect(holdings.getByRole('button', { name: 'Close', exact: true })).toHaveCount(0);
+  await expect(holdings.getByRole('button', { name: 'Sell 100%', exact: true })).toHaveCount(0);
   assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.positions.v1')), positions);
   assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.trades.v1')), journal);
   assert.equal(counts.sends, 1);

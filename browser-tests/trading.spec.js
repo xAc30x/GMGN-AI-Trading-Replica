@@ -429,3 +429,16 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
 });
+
+test('mode banner always states the active mode and what it can do', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  const banner = page.getByRole('status', { name: 'Trading mode SHADOW' });
+  await expect(banner).toContainText('nothing touches a chain');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'SHADOW');
+  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await expect(page.getByRole('status', { name: 'Trading mode PAPER' })).toContainText('nothing is signed or broadcast');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'PAPER');
+});

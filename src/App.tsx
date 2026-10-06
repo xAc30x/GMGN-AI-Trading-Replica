@@ -8,6 +8,7 @@ import { DemoBanner } from './components/DemoBanner';
 import { GateFunnel } from './components/GateFunnel';
 import { Header } from './components/Header';
 import { MetricCards } from './components/MetricCards';
+import { ModeBanner } from './components/ModeBanner';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
@@ -354,7 +355,8 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-mode={mode}>
+      <ModeBanner mode={mode} chain={chain} />
       <DemoBanner />
       <Header
         tab={tab}

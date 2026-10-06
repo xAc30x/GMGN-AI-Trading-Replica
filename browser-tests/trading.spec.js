@@ -70,6 +70,11 @@ function unsignedSwap({ unsafe = false, sell = null } = {}) {
   return base64(transaction.serialize());
 }
 
+// The first-launch tour covers the page; these tests start as a returning user who has already seen it.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('gmgn.tutorial.seen.v1', 'true'); });
+});
+
 async function installWallet(page) {
   const bytes = Array.from(wallet.publicKey.toBytes());
   await page.addInitScript(({ address, publicKeyBytes, mint }) => {

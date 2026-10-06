@@ -45,7 +45,7 @@ export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, o
         </div>
       </div>
 
-      <nav className="tabs" aria-label="Primary">
+      <nav className="tabs" data-tour="tabs" aria-label="Primary">
         <button
           type="button"
           className={`tab ${tab === 'token' ? 'active' : ''}`}
@@ -80,7 +80,7 @@ export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, o
           <span className="dot" aria-hidden />
           {rpcLabel.text}
         </span>
-        <label className="chip select">
+        <label className="chip select" data-tour="chain">
           CHAIN{' '}
           <select value={chain} onChange={(e) => onChain(e.target.value as Chain)} aria-label="Chain">
             {CHAINS.map((c) => (
@@ -90,10 +90,10 @@ export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, o
             ))}
           </select>
         </label>
-        <div className="wallet-btn-wrap">
+        <div className="wallet-btn-wrap" data-tour="wallet">
           <WalletMultiButton />
         </div>
-        <div className="mode-switch" role="group" aria-label="Trading mode">
+        <div className="mode-switch" data-tour="mode-switch" role="group" aria-label="Trading mode">
           {MODES.map((m) => {
             const active = mode === m;
             return (
@@ -113,7 +113,7 @@ export function Header({ tab, onTab, chain, onChain, mode, onMode, clock, rpc, o
           })}
         </div>
         {onOpenSettings && (
-          <button type="button" className="header-btn" onClick={onOpenSettings}>
+          <button type="button" className="header-btn" data-tour="settings" onClick={onOpenSettings}>
             Settings
           </button>
         )}

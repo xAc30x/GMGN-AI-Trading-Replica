@@ -134,7 +134,7 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, select
   const rows = watch.map((w) => toScreenToken(w, scans[w.mint]));
 
   return (
-    <section className={`panel ${scanning ? 'scanning' : ''}`} aria-labelledby="watchlist-title">
+    <section data-tour="watchlist" className={`panel ${scanning ? 'scanning' : ''}`} aria-labelledby="watchlist-title">
       <div className="panel-head">
         <h2 id="watchlist-title">Watchlist</h2>
         <span className="panel-sub" title="Each row is a real on-chain + RugCheck/GoPlus scan">

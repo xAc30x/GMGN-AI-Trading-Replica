@@ -31,7 +31,7 @@ export function modeMessage(mode: TradeMode, chain: Chain): string {
 /** Full-width strip that keeps the active trading mode visible at all times. */
 export function ModeBanner({ mode, chain, liveRemainingMs, onLock }: Props) {
   return (
-    <div className="mode-banner" role="status" aria-label={`Trading mode ${mode}`}>
+    <div className="mode-banner" data-tour="mode-banner" role="status" aria-label={`Trading mode ${mode}`}>
       <span className="mode-banner-dot" aria-hidden />
       <span>{modeMessage(mode, chain)}</span>
       {mode === 'SHADOW' && <span className="mode-banner-hint">switch to PAPER for live screening</span>}

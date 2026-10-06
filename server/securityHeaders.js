@@ -4,10 +4,12 @@
  * HSTS is left to the HTTPS reverse proxy, because this process only speaks plain HTTP on loopback.
  */
 
-/** Origins the wallet adapters and fonts need. Solflare's SDK connects through an iframe. */
+/** Origins the wallet adapters, fonts and charts need. Solflare's SDK connects through an iframe. */
 const FONT_STYLE_ORIGIN = 'https://fonts.googleapis.com';
 const FONT_FILE_ORIGIN = 'https://fonts.gstatic.com';
 const SOLFLARE_FRAME_ORIGIN = 'https://connect.solflare.com';
+/** The live position chart embeds DexScreener's chart page in a sandboxed iframe. */
+const DEXSCREENER_FRAME_ORIGIN = 'https://dexscreener.com';
 
 /**
  * Extra connect-src entries for a browser RPC set at build time (VITE_SOLANA_RPC_URL).
@@ -37,7 +39,7 @@ export function contentSecurityPolicy({ browserRpcUrl } = {}) {
     `font-src 'self' ${FONT_FILE_ORIGIN}`,
     "img-src 'self' data:",
     `connect-src ${connectSrc.join(' ')}`,
-    `frame-src ${SOLFLARE_FRAME_ORIGIN}`,
+    `frame-src ${SOLFLARE_FRAME_ORIGIN} ${DEXSCREENER_FRAME_ORIGIN}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

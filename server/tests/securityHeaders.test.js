@@ -18,6 +18,8 @@ test('content security policy keeps scripts same-origin and forbids framing', ()
   assert.match(csp, /object-src 'none'/);
   assert.match(csp, /connect-src 'self'(;|$)/);
   assert.doesNotMatch(csp, /unsafe-eval/);
+  assert.match(csp, /frame-src https:\/\/connect\.solflare\.com https:\/\/dexscreener\.com(;|$)/,
+    'only the Solflare connector and DexScreener charts may be embedded');
   const withRpc = contentSecurityPolicy({ browserRpcUrl: 'https://rpc.example.com/?api-key=secret' });
   assert.match(withRpc, /connect-src 'self' https:\/\/rpc\.example\.com wss:\/\/rpc\.example\.com/);
   assert.doesNotMatch(withRpc, /secret/, 'API keys in the RPC URL never reach the header');

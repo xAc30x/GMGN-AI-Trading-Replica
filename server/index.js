@@ -162,7 +162,27 @@ function tokensEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+function isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
+
+const MIN_PRODUCTION_TOKEN_LENGTH = 32;
+
+/** Production never generates or writes a token: it must come from the service's environment file. */
+export function assertProductionToken(token) {
+  if (!token) {
+    throw new Error('GMGN_LOCAL_TOKEN must be set in the environment when NODE_ENV=production');
+  }
+  if (token.length < MIN_PRODUCTION_TOKEN_LENGTH) {
+    throw new Error(`GMGN_LOCAL_TOKEN must be at least ${MIN_PRODUCTION_TOKEN_LENGTH} characters in production`);
+  }
+}
+
 function ensureLocalToken() {
+  if (isProduction()) {
+    assertProductionToken(getLocalToken());
+    return;
+  }
   if (getLocalToken()) return;
   const token = crypto.randomBytes(24).toString('base64url');
   writeEnvMerge({ GMGN_LOCAL_TOKEN: token }, { allowKeys: new Set(['GMGN_LOCAL_TOKEN']) });
@@ -564,6 +584,12 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.post('/api/credentials', requireLocalToken, (req, res) => {
+  if (isProduction()) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Saving credentials from the browser is disabled in production. Set them in the server environment file.',
+    });
+  }
   const { walletAddress, apiKey, privateKey } = req.body || {};
   if (privateKey != null && String(privateKey).trim() !== '') {
     return res.status(400).json({

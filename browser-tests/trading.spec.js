@@ -165,6 +165,9 @@ async function installApiFixtures(page, scenario = {}) {
         maxNativeAmount: 0.05,
         maxPortfolioSol: 0.1,
         maxOpenPositions: 5,
+        maxRugScore: 40,
+        minLiquidityUsd: 1000,
+        maxPriceImpactPct: 5,
         mintSafetyRequired: true,
         maxSlippageBps: 300,
         defaultSlippageBps: 100,
@@ -687,7 +690,16 @@ test('settings is a setup checklist that shows what blocks each mode', async ({ 
   await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 1');
   // The page is split into sections, listed in the side navigation in page order.
   const nav = setup.getByRole('navigation', { name: 'Settings sections' });
-  await expect(nav.getByRole('button')).toHaveText(['Access & wallet', 'Network & RPC', 'Trade limits', 'Execution gates']);
+  await expect(nav.getByRole('button')).toHaveText(['Access & wallet', 'Network & RPC', 'Safety gates', 'Trade limits', 'Execution gates']);
+  // Safety gates list the server's real rules, with thresholds from /api/health where the server reports them.
+  const rules = setup.getByRole('region', { name: 'Safety gates' }).getByRole('table', { name: 'Safety rules' });
+  await expect(rules.getByRole('row', { name: /Largest holder/ })).toContainText('under 40% · data required');
+  await expect(rules.getByRole('row', { name: /Largest holder/ })).toContainText('BLOCK');
+  await expect(rules.getByRole('row', { name: /Mintable/ })).toContainText('WARN');
+  await expect(rules.getByRole('row', { name: /Normalised risk score/ })).toContainText('≤ 40GMGN_MAX_RUG_SCORE');
+  await expect(rules.getByRole('row', { name: /Market liquidity/ })).toContainText('≥ $1,000GMGN_MIN_LIQUIDITY_USD');
+  await expect(rules.getByRole('row', { name: /Price impact/ })).toContainText('≤ 5%GMGN_MAX_PRICE_IMPACT_PCT');
+  await expect(rules.getByRole('row', { name: /Both scanners unavailable/ })).toContainText('fail closed');
   const gates = setup.getByRole('region', { name: 'Execution gates' });
   await expect(gates).toContainText('GMGN_SOL_BROADCAST');
   await expect(gates).toContainText('server signingdisabled ✓');

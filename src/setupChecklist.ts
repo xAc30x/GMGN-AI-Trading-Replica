@@ -126,6 +126,8 @@ export interface SettingsSection {
 const SECTIONS: Omit<SettingsSection, 'status'>[] = [
   { id: 'access', label: 'Access & wallet', steps: [1, 2] },
   { id: 'network', label: 'Network & RPC', steps: [3] },
+  // Safety gates are server rules, not setup steps, so the section has no status of its own.
+  { id: 'safety', label: 'Safety gates', steps: [] },
   { id: 'limits', label: 'Trade limits', steps: [5] },
   { id: 'execution', label: 'Execution gates', steps: [4] },
 ];

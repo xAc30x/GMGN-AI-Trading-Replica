@@ -2695,6 +2695,52 @@ table.screen tr:hover td {
   color: var(--text-muted);
 }
 
+/* Safety gates table (step 9b, screen 1d). */
+.rules-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.rules-table th,
+.rules-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rules-table tbody tr:last-child > * { border-bottom: 0; }
+.rules-table thead th {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.rules-table tbody th { font-weight: 500; color: var(--text); }
+.rules-table td { color: var(--text-muted); }
+.rules-table td.mono { font-family: var(--mono); font-size: 10.5px; white-space: nowrap; }
+
+.rule-effect {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.rule-effect.effect-block { background: rgba(232, 90, 74, 0.14); color: var(--red); }
+.rule-effect.effect-warn { background: rgba(232, 160, 32, 0.12); color: var(--orange); }
+
 @media (max-width: 720px) {
   .settings-layout { grid-template-columns: 1fr; gap: 10px; }
   .settings-nav {

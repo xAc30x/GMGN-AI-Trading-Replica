@@ -56,6 +56,7 @@ test('settings sections cover every setup step once and show the worst status of
   assert.deepEqual(sections.map(s => [s.label, s.status]), [
     ['Access & wallet', 'pass'],
     ['Network & RPC', 'pass'],
+    ['Safety gates', 'info'],
     ['Trade limits', 'info'],
     ['Execution gates', 'pass'],
   ]);
@@ -66,8 +67,8 @@ test('settings sections cover every setup step once and show the worst status of
   // A public RPC is a warning, and broadcast off is a warning on the gates.
   const warn = settingsSections(setupSteps({ ...ready, rpcIsPublic: true, health: { ...health, solBroadcastEnabled: false } }));
   assert.equal(warn[1].status, 'warn');
-  assert.equal(warn[3].status, 'warn');
+  assert.equal(warn[4].status, 'warn');
   // With the server unreachable, the network and gate sections fail.
   const down = settingsSections(setupSteps({ ...ready, health: null }));
-  assert.deepEqual(down.map(s => s.status), ['pass', 'fail', 'info', 'fail']);
+  assert.deepEqual(down.map(s => s.status), ['pass', 'fail', 'info', 'info', 'fail']);
 });

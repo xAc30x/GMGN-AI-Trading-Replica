@@ -3,6 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import type { HealthResponse } from '../api';
 import { fetchHealth, saveCredentials } from '../api';
 import { getLocalToken, setLocalToken } from '../localToken';
+import { ALLOWLISTED_MINTS, safetyRules } from '../safetyRules';
 import { limitRows, modeReadiness, settingsSections, setupSteps, type StepStatus } from '../setupChecklist';
 import { isPublicSolanaRpc } from '../solana/constants';
 
@@ -182,99 +183,138 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
             {sections.map((sec) => (
               <section key={sec.id} id={`settings-${sec.id}`} className="settings-section" aria-labelledby={`settings-${sec.id}-h`}>
                 <h4 id={`settings-${sec.id}-h`}>{sec.label}</h4>
-                <ol className="setup-steps" aria-label={`${sec.label} steps`}>
-                  {steps.filter((s) => sec.steps.includes(s.n)).map((s) => (
-                    <li key={s.n} className={`setup-step step-${s.status}`}>
-                      <span className="setup-badge" aria-label={s.status === 'info' ? `step ${s.n}` : s.status}>
-                        {GLYPH[s.status] || s.n}
-                      </span>
-                      <div className="setup-body">
-                        <div className="setup-title">
-                          <b>{s.title}</b>
-                          <span className="setup-role">{s.role}</span>
-                          <span className="setup-detail">{s.detail}</span>
-                        </div>
+                {sec.id === 'safety' && (
+                  <>
+                    <p className="setup-note">
+                      The server checks these before it builds any LIVE buy or close, and before PAPER entries. If both
+                      RugCheck and GoPlus are unavailable, trading fails closed.
+                    </p>
+                    <div className="rules-wrap">
+                      <table className="rules-table" aria-label="Safety rules">
+                        <thead>
+                          <tr>
+                            <th scope="col">Rule</th>
+                            <th scope="col">Provider</th>
+                            <th scope="col">Threshold</th>
+                            <th scope="col">Setting</th>
+                            <th scope="col">Effect</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {safetyRules(health).map((r) => (
+                            <tr key={r.rule}>
+                              <th scope="row">{r.rule}</th>
+                              <td>{r.provider}</td>
+                              <td className="mono">{r.threshold}</td>
+                              <td className="mono">{r.setting}</td>
+                              <td><span className={`rule-effect effect-${r.effect.toLowerCase()}`}>{r.effect}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="setup-note">
+                      Allowlisted mints ({ALLOWLISTED_MINTS.join(', ')}) skip the authority, score, liquidity, largest-holder and
+                      GoPlus blocks. The liquidity figure comes from RugCheck, so a nonzero floor blocks while RugCheck is unavailable.
+                      Change a setting in <code>server/.env</code>, then restart the backend.
+                    </p>
+                  </>
+                )}
+                {sec.steps.length > 0 && (
+                  <ol className="setup-steps" aria-label={`${sec.label} steps`}>
+                    {steps.filter((s) => sec.steps.includes(s.n)).map((s) => (
+                      <li key={s.n} className={`setup-step step-${s.status}`}>
+                        <span className="setup-badge" aria-label={s.status === 'info' ? `step ${s.n}` : s.status}>
+                          {GLYPH[s.status] || s.n}
+                        </span>
+                        <div className="setup-body">
+                          <div className="setup-title">
+                            <b>{s.title}</b>
+                            <span className="setup-role">{s.role}</span>
+                            <span className="setup-detail">{s.detail}</span>
+                          </div>
 
-                        {s.n === 1 && (
-                          <>
-                            {showTokenInput ? (
-                              <div className="setup-token">
-                                <input
-                                  type="password"
-                                  value={tokenField}
-                                  onChange={(e) => setTokenField(e.target.value)}
-                                  placeholder="Paste GMGN_LOCAL_TOKEN"
-                                  autoComplete="off"
-                                  aria-label="Local access token"
-                                />
-                                <button type="button" className="btn-primary btn-small" onClick={() => void saveToken()}>
-                                  Save token
-                                </button>
-                                {replacing && (
-                                  <button type="button" className="btn-ghost btn-small" onClick={() => { setReplacing(false); setTokenField(''); }}>
-                                    Cancel
+                          {s.n === 1 && (
+                            <>
+                              {showTokenInput ? (
+                                <div className="setup-token">
+                                  <input
+                                    type="password"
+                                    value={tokenField}
+                                    onChange={(e) => setTokenField(e.target.value)}
+                                    placeholder="Paste GMGN_LOCAL_TOKEN"
+                                    autoComplete="off"
+                                    aria-label="Local access token"
+                                  />
+                                  <button type="button" className="btn-primary btn-small" onClick={() => void saveToken()}>
+                                    Save token
                                   </button>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="setup-actions">
-                                <button type="button" className="btn-ghost btn-small" onClick={() => setReplacing(true)}>
-                                  Replace
-                                </button>
-                                <button type="button" className="btn-ghost btn-small" onClick={() => void forgetToken()}>
-                                  Forget
-                                </button>
-                              </div>
-                            )}
-                            <code className="setup-cmd">grep GMGN_LOCAL_TOKEN server/.env</code>
-                          </>
-                        )}
+                                  {replacing && (
+                                    <button type="button" className="btn-ghost btn-small" onClick={() => { setReplacing(false); setTokenField(''); }}>
+                                      Cancel
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="setup-actions">
+                                  <button type="button" className="btn-ghost btn-small" onClick={() => setReplacing(true)}>
+                                    Replace
+                                  </button>
+                                  <button type="button" className="btn-ghost btn-small" onClick={() => void forgetToken()}>
+                                    Forget
+                                  </button>
+                                </div>
+                              )}
+                              <code className="setup-cmd">grep GMGN_LOCAL_TOKEN server/.env</code>
+                            </>
+                          )}
 
-                        {s.n === 2 && (
-                          <p className="setup-note">
-                            {s.status === 'pass'
-                              ? 'This app never holds a private key. Use a throwaway wallet with a small balance.'
-                              : 'Connect Phantom or Solflare with the wallet button in the header. This app never holds a private key.'}
-                          </p>
-                        )}
+                          {s.n === 2 && (
+                            <p className="setup-note">
+                              {s.status === 'pass'
+                                ? 'This app never holds a private key. Use a throwaway wallet with a small balance.'
+                                : 'Connect Phantom or Solflare with the wallet button in the header. This app never holds a private key.'}
+                            </p>
+                          )}
 
-                        {s.n === 3 && s.status === 'warn' && (
-                          <p className="setup-note">
-                            Works for smoke tests, unreliable for trading. Set the same dedicated URL for server and browser:{' '}
-                            <code>SOLANA_RPC_URL</code> · <code>VITE_SOLANA_RPC_URL</code>
-                          </p>
-                        )}
+                          {s.n === 3 && s.status === 'warn' && (
+                            <p className="setup-note">
+                              Works for smoke tests, unreliable for trading. Set the same dedicated URL for server and browser:{' '}
+                              <code>SOLANA_RPC_URL</code> · <code>VITE_SOLANA_RPC_URL</code>
+                            </p>
+                          )}
 
-                        {s.n === 4 && gates.length > 0 && (
-                          <>
-                            <dl className="setup-kv">
-                              {gates.map(([k, v, ok]) => (
+                          {s.n === 4 && gates.length > 0 && (
+                            <>
+                              <dl className="setup-kv">
+                                {gates.map(([k, v, ok]) => (
+                                  <div key={k}>
+                                    <dt>{k}</dt>
+                                    <dd className={ok ? 'pos' : 'warn'}>{v}</dd>
+                                  </div>
+                                ))}
+                              </dl>
+                              <p className="setup-note">
+                                Broadcast is a separate, default-off opt-in. Keeping it off is the safe default; PAPER doesn't need it.
+                              </p>
+                            </>
+                          )}
+
+                          {s.n === 5 && limits.length > 0 && (
+                            <dl className="setup-kv setup-limits">
+                              {limits.map(([k, v]) => (
                                 <div key={k}>
                                   <dt>{k}</dt>
-                                  <dd className={ok ? 'pos' : 'warn'}>{v}</dd>
+                                  <dd>{v}</dd>
                                 </div>
                               ))}
                             </dl>
-                            <p className="setup-note">
-                              Broadcast is a separate, default-off opt-in. Keeping it off is the safe default; PAPER doesn't need it.
-                            </p>
-                          </>
-                        )}
-
-                        {s.n === 5 && limits.length > 0 && (
-                          <dl className="setup-kv setup-limits">
-                            {limits.map(([k, v]) => (
-                              <div key={k}>
-                                <dt>{k}</dt>
-                                <dd>{v}</dd>
-                              </div>
-                            ))}
-                          </dl>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
 
                 {sec.id === 'access' && (
                   <details className="setup-legacy">

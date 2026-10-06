@@ -1162,7 +1162,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   stripPersistedPrivateKey();
   ensureLocalToken();
   startResearchMonitor();
-  app.listen(PORT, '127.0.0.1', () => {
+  // Express 5 hands listen errors (such as a busy port) to this callback instead of throwing.
+  app.listen(PORT, '127.0.0.1', (error) => {
+    if (error) {
+      console.error(error.code === 'EADDRINUSE'
+        ? `Port ${PORT} on 127.0.0.1 is already in use, probably by another copy of this server. Stop it, or set PORT to a free port, then start again.`
+        : `Server failed to start: ${error.message}`);
+      process.exit(1);
+    }
     console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
     console.log(`CORS origin: ${VITE_ORIGIN}`);
     console.log(

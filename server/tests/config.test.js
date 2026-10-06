@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import { mkdtempSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('file configuration is loaded before Jupiter constants initialize', () => {
   const root=fileURLToPath(new URL('../../',import.meta.url));
@@ -20,4 +22,55 @@ test('file configuration is loaded before Jupiter constants initialize', () => {
     assert.equal(result.status,0,result.stderr);
     assert.deepEqual(JSON.parse(result.stdout.trim()),[222,2]);
   } finally { rmSync(tmp,{ recursive:true,force:true }); }
+});
+
+test('secrets file path defaults under ~/.config and honours GMGN_SECRETS_PATH', async () => {
+  const { secretsFilePath } = await import('../config.js');
+  const home = '/home/someone';
+  assert.equal(secretsFilePath({}, home), '/home/someone/.config/gmgn-trader/secrets.json');
+  assert.equal(secretsFilePath({ GMGN_SECRETS_PATH: '  ' }, home), '/home/someone/.config/gmgn-trader/secrets.json');
+  assert.equal(secretsFilePath({ GMGN_SECRETS_PATH: '/srv/app/secrets.json' }, home), '/srv/app/secrets.json');
+  assert.equal(secretsFilePath({ GMGN_SECRETS_PATH: '~/private/s.json' }, home), '/home/someone/private/s.json');
+  assert.throws(() => secretsFilePath({ GMGN_SECRETS_PATH: 'relative/s.json' }, home), /GMGN_SECRETS_PATH/);
+});
+
+test('secrets file loads only the allowed keys and never overrides existing values', async () => {
+  const { loadSecretsFile } = await import('../config.js');
+  const dir = mkdtempSync(join(tmpdir(), 'gmgn-secrets-test-'));
+  try {
+    const file = join(dir, 'secrets.json');
+    writeFileSync(file, JSON.stringify({ card: {
+      GMGN_API_KEY: ' key-from-file ', GMGN_WALLET_ADDRESS: 'wallet-from-file',
+      GMGN_PRIVATE_KEY: 'must-not-load', GMGN_LIVE: '1',
+    } }));
+    const env = { GMGN_WALLET_ADDRESS: 'wallet-from-env' };
+    const warnings = [];
+    loadSecretsFile(file, env, (m) => warnings.push(m));
+    assert.deepEqual(env, { GMGN_WALLET_ADDRESS: 'wallet-from-env', GMGN_API_KEY: 'key-from-file' });
+    assert.deepEqual(warnings, []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('missing secrets file is silent; malformed file warns without revealing contents', async () => {
+  const { loadSecretsFile } = await import('../config.js');
+  const dir = mkdtempSync(join(tmpdir(), 'gmgn-secrets-test-'));
+  try {
+    const warnings = [];
+    const env = {};
+    loadSecretsFile(join(dir, 'absent.json'), env, (m) => warnings.push(m));
+    assert.deepEqual(warnings, []);
+
+    const bad = join(dir, 'bad.json');
+    writeFileSync(bad, '{"card": {"GMGN_API_KEY": "secret-value-123"');
+    loadSecretsFile(bad, env, (m) => warnings.push(m));
+    const noCard = join(dir, 'nocard.json');
+    writeFileSync(noCard, '{"GMGN_API_KEY": "secret-value-123"}');
+    loadSecretsFile(noCard, env, (m) => warnings.push(m));
+
+    assert.equal(warnings.length, 2);
+    assert.ok(warnings[0].includes(bad));
+    assert.ok(warnings[1].includes(noCard));
+    for (const w of warnings) assert.ok(!w.includes('secret-value-123'));
+    assert.deepEqual(env, {});
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

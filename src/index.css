@@ -2617,6 +2617,96 @@ table.screen tr:hover td {
   color: var(--text-dim);
 }
 
+/* Settings as a full page with a section list (step 9a, screen 1d). */
+.modal.settings-page {
+  width: min(1040px, 100%);
+  max-width: none;
+  height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 18px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border-soft);
+}
+
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav button:hover { color: var(--text); }
+.settings-nav button[aria-current] { background: var(--bg-card); color: var(--text); font-weight: 600; }
+
+.settings-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.settings-dot.dot-pass { background: var(--lime-dim); }
+.settings-dot.dot-warn { background: var(--orange); }
+.settings-dot.dot-fail { background: var(--red); }
+
+.settings-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+}
+
+.settings-intro {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.settings-section { scroll-margin-top: 4px; }
+
+.settings-section > h4 {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: 1fr; gap: 10px; }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .settings-nav button { white-space: nowrap; }
+}
+
 /* Safety matrix (step 8a, screen 1b). */
 .matrix {
   display: flex;

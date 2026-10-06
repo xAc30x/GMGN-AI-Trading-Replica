@@ -113,3 +113,30 @@ export function limitRows(health: HealthResponse | null): [string, string][] {
   if (typeof health.maxPriceImpactPct === 'number') rows.push(['price impact', `${health.maxPriceImpactPct}%`]);
   return rows;
 }
+
+export interface SettingsSection {
+  id: string;
+  label: string;
+  /** Setup step numbers shown in this section, in order. */
+  steps: number[];
+  /** Worst status among its steps: fail, then warn, then pass. 'info' when every step is informational. */
+  status: StepStatus;
+}
+
+const SECTIONS: Omit<SettingsSection, 'status'>[] = [
+  { id: 'access', label: 'Access & wallet', steps: [1, 2] },
+  { id: 'network', label: 'Network & RPC', steps: [3] },
+  { id: 'limits', label: 'Trade limits', steps: [5] },
+  { id: 'execution', label: 'Execution gates', steps: [4] },
+];
+
+const RANK: Record<StepStatus, number> = { info: 0, pass: 1, warn: 2, fail: 3 };
+
+/** Groups the setup steps into the settings page sections, each with the status of its worst step. */
+export function settingsSections(steps: SetupStep[]): SettingsSection[] {
+  return SECTIONS.map((s) => {
+    const statuses = steps.filter((st) => s.steps.includes(st.n)).map((st) => st.status);
+    const status = statuses.reduce<StepStatus>((worst, st) => (RANK[st] > RANK[worst] ? st : worst), 'info');
+    return { ...s, status };
+  });
+}

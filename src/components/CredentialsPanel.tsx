@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import type { HealthResponse } from '../api';
 import { fetchHealth, saveCredentials } from '../api';
 import { getLocalToken, setLocalToken } from '../localToken';
-import { limitRows, modeReadiness, setupSteps, type StepStatus } from '../setupChecklist';
+import { limitRows, modeReadiness, settingsSections, setupSteps, type StepStatus } from '../setupChecklist';
 import { isPublicSolanaRpc } from '../solana/constants';
 
 interface Props {
@@ -35,6 +35,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [active, setActive] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
@@ -67,6 +68,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
     rpcIsPublic,
   });
   const readiness = modeReadiness(steps);
+  const sections = settingsSections(steps);
   const limits = limitRows(health);
   const showTokenInput = !tokenPresent || replacing;
 
@@ -127,14 +129,20 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
       ]
     : [];
 
+  const jump = (id: string) => {
+    setActive(id);
+    document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
       <div
-        className="modal credentials-modal"
+        className="modal credentials-modal settings-page"
         role="dialog"
         aria-modal="true"
         aria-labelledby="cred-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
       >
         <div className="modal-head">
           <h3 id="cred-title">Setup &amp; credentials</h3>
@@ -144,158 +152,185 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
           </button>
         </div>
 
-        <ul className="setup-modes" aria-label="Mode readiness">
-          {readiness.map((r) => (
-            <li key={r.mode} className={r.ready ? 'is-ready' : 'is-blocked'}>
-              <span className="setup-mode-name">{r.mode}</span>
-              <span>{r.ready ? '✓ Ready' : `✕ Blocked by step ${r.blockedBy}`}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="Settings sections">
+            {sections.map((sec) => (
+              <button
+                key={sec.id}
+                type="button"
+                aria-current={active === sec.id ? 'true' : undefined}
+                onClick={() => jump(sec.id)}
+              >
+                <span className={`settings-dot dot-${sec.status}`} aria-hidden="true" />
+                {sec.label}
+              </button>
+            ))}
+          </nav>
 
-        <ol className="setup-steps" aria-label="Setup steps">
-          {steps.map((s) => (
-            <li key={s.n} className={`setup-step step-${s.status}`}>
-              <span className="setup-badge" aria-label={s.status === 'info' ? `step ${s.n}` : s.status}>
-                {GLYPH[s.status] || s.n}
-              </span>
-              <div className="setup-body">
-                <div className="setup-title">
-                  <b>{s.title}</b>
-                  <span className="setup-role">{s.role}</span>
-                  <span className="setup-detail">{s.detail}</span>
-                </div>
+          <div className="settings-content">
+            <p className="settings-intro">Server-owned values are shown read-only. Edit server/.env and restart the backend.</p>
 
-                {s.n === 1 && (
-                  <>
-                    {showTokenInput ? (
-                      <div className="setup-token">
-                        <input
-                          type="password"
-                          value={tokenField}
-                          onChange={(e) => setTokenField(e.target.value)}
-                          placeholder="Paste GMGN_LOCAL_TOKEN"
-                          autoComplete="off"
-                          aria-label="Local access token"
-                        />
-                        <button type="button" className="btn-primary btn-small" onClick={() => void saveToken()}>
-                          Save token
-                        </button>
-                        {replacing && (
-                          <button type="button" className="btn-ghost btn-small" onClick={() => { setReplacing(false); setTokenField(''); }}>
-                            Cancel
-                          </button>
+            <ul className="setup-modes" aria-label="Mode readiness">
+              {readiness.map((r) => (
+                <li key={r.mode} className={r.ready ? 'is-ready' : 'is-blocked'}>
+                  <span className="setup-mode-name">{r.mode}</span>
+                  <span>{r.ready ? '✓ Ready' : `✕ Blocked by step ${r.blockedBy}`}</span>
+                </li>
+              ))}
+            </ul>
+
+            {sections.map((sec) => (
+              <section key={sec.id} id={`settings-${sec.id}`} className="settings-section" aria-labelledby={`settings-${sec.id}-h`}>
+                <h4 id={`settings-${sec.id}-h`}>{sec.label}</h4>
+                <ol className="setup-steps" aria-label={`${sec.label} steps`}>
+                  {steps.filter((s) => sec.steps.includes(s.n)).map((s) => (
+                    <li key={s.n} className={`setup-step step-${s.status}`}>
+                      <span className="setup-badge" aria-label={s.status === 'info' ? `step ${s.n}` : s.status}>
+                        {GLYPH[s.status] || s.n}
+                      </span>
+                      <div className="setup-body">
+                        <div className="setup-title">
+                          <b>{s.title}</b>
+                          <span className="setup-role">{s.role}</span>
+                          <span className="setup-detail">{s.detail}</span>
+                        </div>
+
+                        {s.n === 1 && (
+                          <>
+                            {showTokenInput ? (
+                              <div className="setup-token">
+                                <input
+                                  type="password"
+                                  value={tokenField}
+                                  onChange={(e) => setTokenField(e.target.value)}
+                                  placeholder="Paste GMGN_LOCAL_TOKEN"
+                                  autoComplete="off"
+                                  aria-label="Local access token"
+                                />
+                                <button type="button" className="btn-primary btn-small" onClick={() => void saveToken()}>
+                                  Save token
+                                </button>
+                                {replacing && (
+                                  <button type="button" className="btn-ghost btn-small" onClick={() => { setReplacing(false); setTokenField(''); }}>
+                                    Cancel
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="setup-actions">
+                                <button type="button" className="btn-ghost btn-small" onClick={() => setReplacing(true)}>
+                                  Replace
+                                </button>
+                                <button type="button" className="btn-ghost btn-small" onClick={() => void forgetToken()}>
+                                  Forget
+                                </button>
+                              </div>
+                            )}
+                            <code className="setup-cmd">grep GMGN_LOCAL_TOKEN server/.env</code>
+                          </>
+                        )}
+
+                        {s.n === 2 && (
+                          <p className="setup-note">
+                            {s.status === 'pass'
+                              ? 'This app never holds a private key. Use a throwaway wallet with a small balance.'
+                              : 'Connect Phantom or Solflare with the wallet button in the header. This app never holds a private key.'}
+                          </p>
+                        )}
+
+                        {s.n === 3 && s.status === 'warn' && (
+                          <p className="setup-note">
+                            Works for smoke tests, unreliable for trading. Set the same dedicated URL for server and browser:{' '}
+                            <code>SOLANA_RPC_URL</code> · <code>VITE_SOLANA_RPC_URL</code>
+                          </p>
+                        )}
+
+                        {s.n === 4 && gates.length > 0 && (
+                          <>
+                            <dl className="setup-kv">
+                              {gates.map(([k, v, ok]) => (
+                                <div key={k}>
+                                  <dt>{k}</dt>
+                                  <dd className={ok ? 'pos' : 'warn'}>{v}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                            <p className="setup-note">
+                              Broadcast is a separate, default-off opt-in. Keeping it off is the safe default; PAPER doesn't need it.
+                            </p>
+                          </>
+                        )}
+
+                        {s.n === 5 && limits.length > 0 && (
+                          <dl className="setup-kv setup-limits">
+                            {limits.map(([k, v]) => (
+                              <div key={k}>
+                                <dt>{k}</dt>
+                                <dd>{v}</dd>
+                              </div>
+                            ))}
+                          </dl>
                         )}
                       </div>
-                    ) : (
-                      <div className="setup-actions">
-                        <button type="button" className="btn-ghost btn-small" onClick={() => setReplacing(true)}>
-                          Replace
-                        </button>
-                        <button type="button" className="btn-ghost btn-small" onClick={() => void forgetToken()}>
-                          Forget
-                        </button>
+                    </li>
+                  ))}
+                </ol>
+
+                {sec.id === 'access' && (
+                  <details className="setup-legacy">
+                    <summary>Legacy GMGN quote path (non-SOL chains): wallet address, API key. Optional.</summary>
+                    <div className="cred-status">
+                      <div>
+                        CLI: <strong className={health?.cliInstalled ? 'pos' : 'neg'}>{health?.cliInstalled ? 'installed' : 'not found'}</strong>
                       </div>
-                    )}
-                    <code className="setup-cmd">grep GMGN_LOCAL_TOKEN server/.env</code>
-                  </>
-                )}
-
-                {s.n === 2 && (
-                  <p className="setup-note">
-                    {s.status === 'pass'
-                      ? 'This app never holds a private key. Use a throwaway wallet with a small balance.'
-                      : 'Connect Phantom or Solflare with the wallet button in the header. This app never holds a private key.'}
-                  </p>
-                )}
-
-                {s.n === 3 && s.status === 'warn' && (
-                  <p className="setup-note">
-                    Works for smoke tests, unreliable for trading. Set the same dedicated URL for server and browser:{' '}
-                    <code>SOLANA_RPC_URL</code> · <code>VITE_SOLANA_RPC_URL</code>
-                  </p>
-                )}
-
-                {s.n === 4 && gates.length > 0 && (
-                  <>
-                    <dl className="setup-kv">
-                      {gates.map(([k, v, ok]) => (
-                        <div key={k}>
-                          <dt>{k}</dt>
-                          <dd className={ok ? 'pos' : 'warn'}>{v}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                    <p className="setup-note">
-                      Broadcast is a separate, default-off opt-in. Keeping it off is the safe default; PAPER doesn't need it.
-                    </p>
-                  </>
-                )}
-
-                {s.n === 5 && limits.length > 0 && (
-                  <dl className="setup-kv setup-limits">
-                    {limits.map(([k, v]) => (
-                      <div key={k}>
-                        <dt>{k}</dt>
-                        <dd>{v}</dd>
+                      <div>
+                        API key: <strong className={c?.apiKey ? 'pos' : 'neg'}>{sourceLabel(c?.apiKeySource, c?.apiKey)}</strong>
                       </div>
-                    ))}
-                  </dl>
+                      <div>
+                        Wallet: <strong className={c?.wallet ? 'pos' : 'neg'}>{c?.wallet ? c.walletAddressMasked || 'set' : 'missing'}</strong>
+                      </div>
+                      <div>
+                        GMGN quotes: <strong className={health?.liveReady ? 'pos' : 'neg'}>{health?.liveReady ? 'yes' : 'no'}</strong>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="cred-wallet">Wallet address (legacy GMGN quotes only)</label>
+                      <input
+                        id="cred-wallet"
+                        value={walletAddr}
+                        onChange={(e) => setWalletAddr(e.target.value)}
+                        placeholder={c?.walletAddressMasked || 'Solana / EVM address'}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                    {c?.apiKeySource === 'missing' ? (
+                      <div className="field">
+                        <label htmlFor="cred-api">GMGN API key (legacy quotes only)</label>
+                        <input
+                          id="cred-api"
+                          type="password"
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          placeholder="Paste only if not already in env"
+                          autoComplete="off"
+                        />
+                      </div>
+                    ) : c?.apiKey ? (
+                      <p className="setup-note">API key is already configured via env or file. No need to paste it here.</p>
+                    ) : null}
+                    <button type="button" className="btn-ghost btn-small" disabled={busy} onClick={() => void saveLegacy()}>
+                      {busy ? 'Saving…' : 'Save legacy settings'}
+                    </button>
+                  </details>
                 )}
-              </div>
-            </li>
-          ))}
-        </ol>
+              </section>
+            ))}
 
-        <details className="setup-legacy">
-          <summary>Legacy GMGN quote path (non-SOL chains): wallet address, API key. Optional.</summary>
-          <div className="cred-status">
-            <div>
-              CLI: <strong className={health?.cliInstalled ? 'pos' : 'neg'}>{health?.cliInstalled ? 'installed' : 'not found'}</strong>
-            </div>
-            <div>
-              API key: <strong className={c?.apiKey ? 'pos' : 'neg'}>{sourceLabel(c?.apiKeySource, c?.apiKey)}</strong>
-            </div>
-            <div>
-              Wallet: <strong className={c?.wallet ? 'pos' : 'neg'}>{c?.wallet ? c.walletAddressMasked || 'set' : 'missing'}</strong>
-            </div>
-            <div>
-              GMGN quotes: <strong className={health?.liveReady ? 'pos' : 'neg'}>{health?.liveReady ? 'yes' : 'no'}</strong>
-            </div>
+            {msg && <div className="cred-msg ok">{msg}</div>}
+            {err && <div className="cred-msg err">{err}</div>}
           </div>
-          <div className="field">
-            <label htmlFor="cred-wallet">Wallet address (legacy GMGN quotes only)</label>
-            <input
-              id="cred-wallet"
-              value={walletAddr}
-              onChange={(e) => setWalletAddr(e.target.value)}
-              placeholder={c?.walletAddressMasked || 'Solana / EVM address'}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-          {c?.apiKeySource === 'missing' ? (
-            <div className="field">
-              <label htmlFor="cred-api">GMGN API key (legacy quotes only)</label>
-              <input
-                id="cred-api"
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Paste only if not already in env"
-                autoComplete="off"
-              />
-            </div>
-          ) : c?.apiKey ? (
-            <p className="setup-note">API key is already configured via env or file. No need to paste it here.</p>
-          ) : null}
-          <button type="button" className="btn-ghost btn-small" disabled={busy} onClick={() => void saveLegacy()}>
-            {busy ? 'Saving…' : 'Save legacy settings'}
-          </button>
-        </details>
-
-        {msg && <div className="cred-msg ok">{msg}</div>}
-        {err && <div className="cred-msg err">{err}</div>}
+        </div>
 
         <div className="modal-actions">
           <button type="button" className="btn-ghost" onClick={() => void refresh()}>

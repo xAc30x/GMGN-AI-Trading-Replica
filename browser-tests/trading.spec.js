@@ -685,10 +685,17 @@ test('settings is a setup checklist that shows what blocks each mode', async ({ 
   await expect(modes.getByRole('listitem').filter({ hasText: 'SHADOW' })).toContainText('Ready');
   await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
   await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 1');
-  const steps = setup.getByRole('list', { name: 'Setup steps' });
-  await expect(steps).toContainText('GMGN_SOL_BROADCAST');
-  await expect(steps).toContainText('server signingdisabled ✓');
-  await expect(steps).toContainText('per trade0.05 SOL');
+  // The page is split into sections, listed in the side navigation in page order.
+  const nav = setup.getByRole('navigation', { name: 'Settings sections' });
+  await expect(nav.getByRole('button')).toHaveText(['Access & wallet', 'Network & RPC', 'Trade limits', 'Execution gates']);
+  const gates = setup.getByRole('region', { name: 'Execution gates' });
+  await expect(gates).toContainText('GMGN_SOL_BROADCAST');
+  await expect(gates).toContainText('server signingdisabled ✓');
+  await expect(setup.getByRole('region', { name: 'Trade limits' })).toContainText('per trade0.05 SOL');
+  await expect(setup.getByRole('region', { name: 'Access & wallet' }).getByLabel('Local access token')).toBeVisible();
+  await nav.getByRole('button', { name: 'Execution gates' }).click();
+  await expect(nav.getByRole('button', { name: 'Execution gates' })).toHaveAttribute('aria-current', 'true');
+  await expect(gates).toBeInViewport();
 
   await setup.getByLabel('Local access token').fill('browser-fixture-token');
   await setup.getByRole('button', { name: 'Save token' }).click();

@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../../src/setupChecklist.ts', import.meta.u
 const { outputText } = ts.transpileModule(source, { compilerOptions: {
   target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext,
 } });
-const { setupSteps, modeReadiness, limitRows } =
+const { setupSteps, modeReadiness, limitRows, settingsSections } =
   await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
 
 // Field names as server/index.js reports them in /api/health.
@@ -49,4 +49,25 @@ test('hard limits list only what the server reports', () => {
   ]);
   assert.deepEqual(limitRows({ maxNativeAmount: 0.02 }), [['per trade', '0.02 SOL']]);
   assert.deepEqual(limitRows(null), []);
+});
+
+test('settings sections cover every setup step once and show the worst status of their steps', () => {
+  const sections = settingsSections(setupSteps(ready));
+  assert.deepEqual(sections.map(s => [s.label, s.status]), [
+    ['Access & wallet', 'pass'],
+    ['Network & RPC', 'pass'],
+    ['Trade limits', 'info'],
+    ['Execution gates', 'pass'],
+  ]);
+  assert.deepEqual(sections.flatMap(s => s.steps).sort(), [1, 2, 3, 4, 5]);
+  // A missing wallet fails the access section even though the token is fine.
+  const noWallet = settingsSections(setupSteps({ ...ready, walletAddress: null }));
+  assert.equal(noWallet[0].status, 'fail');
+  // A public RPC is a warning, and broadcast off is a warning on the gates.
+  const warn = settingsSections(setupSteps({ ...ready, rpcIsPublic: true, health: { ...health, solBroadcastEnabled: false } }));
+  assert.equal(warn[1].status, 'warn');
+  assert.equal(warn[3].status, 'warn');
+  // With the server unreachable, the network and gate sections fail.
+  const down = settingsSections(setupSteps({ ...ready, health: null }));
+  assert.deepEqual(down.map(s => s.status), ['pass', 'fail', 'info', 'fail']);
 });

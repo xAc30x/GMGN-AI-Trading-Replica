@@ -153,7 +153,7 @@ async function installApiFixtures(page, scenario = {}) {
         cliInstalled: false,
         liveEnabled: true,
         solLiveEnabled: true,
-        solBroadcastEnabled: true,
+        solBroadcastEnabled: scenario.broadcast ?? true,
         solWalletTrading: true,
         liveReady: true,
         rpcIsPublic: false,
@@ -267,6 +267,15 @@ async function installApiFixtures(page, scenario = {}) {
   return counts;
 }
 
+async function unlockLive(page) {
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  await expect(unlock).toBeVisible();
+  await unlock.getByLabel(/to confirm/).fill('live');
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 30 min' }).click();
+  await expect(unlock).toHaveCount(0);
+}
+
 async function openLiveTrade(page, openBuy = true) {
   await installWallet(page);
   await page.goto('/');
@@ -275,7 +284,7 @@ async function openLiveTrade(page, openBuy = true) {
   const modes = page.getByRole('group', { name: 'Trading mode' });
   await modes.getByRole('button', { name: 'PAPER' }).click();
   await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
-  await modes.getByRole('button', { name: /LIVE/ }).click();
+  await unlockLive(page);
   await expect(modes.getByRole('button', { name: 'LIVE' })).toHaveAttribute('aria-pressed', 'true');
   if (!openBuy) return;
   await page.getByRole('button', { name: /BUY 0.01 SOL/ }).click();
@@ -453,4 +462,50 @@ test('header reports the RPC type from server status and offers one mode switch'
   const modes = page.getByRole('group', { name: 'Trading mode' });
   await expect(modes.getByRole('button')).toHaveText(['SHADOW', 'PAPER', 'LIVE ⊘']);
   await expect(modes.getByRole('button', { name: 'SHADOW' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('LIVE needs typed confirmation, blocks on a failed preflight and can be cancelled', async ({ page }) => {
+  await installWallet(page);
+  await installApiFixtures(page, { broadcast: false });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  const checks = unlock.getByRole('list', { name: 'Preflight checks' });
+  await expect(checks.getByRole('listitem').filter({ hasText: 'GMGN_SOL_BROADCAST' })).toContainText('unset · no sends');
+  await expect(checks.getByRole('listitem').filter({ hasText: 'Wallet connected' })).toContainText('Phantom');
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  await expect(unlock.getByRole('button', { name: /Blocked · 1 preflight check failed/ })).toBeDisabled();
+  await unlock.getByRole('button', { name: /Stay in SHADOW/ }).click();
+  await expect(modes.getByRole('button', { name: 'SHADOW' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('LIVE unlock is time-boxed and Lock now returns to PAPER', async ({ page }) => {
+  await installWallet(page);
+  await installApiFixtures(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  await expect(unlock.getByRole('button', { name: 'Type LIVE to unlock' })).toBeDisabled();
+  await unlock.getByRole('button', { name: '15 min' }).click();
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 15 min' }).click();
+  await expect(page.getByRole('status', { name: 'Trading mode LIVE' })).toContainText('auto-locks in 15:00');
+  await page.clock.fastForward('15:01');
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('LIVE session ended — switched back to PAPER')).toBeVisible();
+
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  await expect(unlock.getByLabel(/to confirm/)).toHaveValue('');
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  // The dialog remembers the last session length but never the typed confirmation.
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 15 min' }).click();
+  await page.getByRole('button', { name: 'LOCK NOW' }).click();
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
 });

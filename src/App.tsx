@@ -10,6 +10,9 @@ import { Header } from './components/Header';
 import type { RpcKind } from './components/Header';
 import { MetricCards } from './components/MetricCards';
 import { ModeBanner } from './components/ModeBanner';
+import { LiveUnlockDialog } from './components/LiveUnlockDialog';
+import { livePreflight } from './livePreflight';
+import type { LiveSessionMinutes } from './livePreflight';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
@@ -22,6 +25,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
 import {
   loadLivePositions,
+  loadTradeAttempts,
   reconcileWalletTrades,
   LIVE_POSITIONS_STORAGE_KEY,
 } from './positions';
@@ -64,6 +68,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credOpen, setCredOpen] = useState(false);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  /** Epoch ms when the current LIVE session auto-locks; null outside LIVE. */
+  const [liveUntil, setLiveUntil] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [command, setCommand] = useState(DEFAULT_TRENDING_CMD);
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
@@ -94,6 +102,7 @@ export default function App() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setClock(utcClock());
+      setNowMs(Date.now());
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
@@ -155,6 +164,36 @@ export default function App() {
     ]);
   }, []);
 
+  /** Every mode change goes through here so a LIVE session timer never outlives LIVE. */
+  const applyMode = useCallback((m: TradeMode, liveMinutes?: LiveSessionMinutes) => {
+    setMode(m);
+    setLiveUntil(m === 'LIVE' && liveMinutes ? Date.now() + liveMinutes * 60_000 : null);
+    const msg =
+      m === 'LIVE'
+        ? chain === 'SOL'
+          ? `Mode LIVE — wallet-signed SOL Jupiter · auto-locks in ${liveMinutes} min.`
+          : `Mode LIVE — quote/intent only on this chain · auto-locks in ${liveMinutes} min.`
+        : m === 'PAPER'
+          ? 'Mode PAPER — simulate only (no send). Discovery and watchlist use live screening.'
+          : 'Mode SHADOW (mock UI only).';
+    appendLog('SCREEN', 'mode', msg);
+  }, [chain, appendLog]);
+
+  const lockLive = useCallback((reason: string) => {
+    applyMode('PAPER');
+    appendLog('SCREEN', 'mode', reason);
+    showToast(reason);
+  }, [applyMode, appendLog, showToast]);
+
+  useEffect(() => {
+    if (mode !== 'LIVE' || liveUntil === null) return;
+    const id = window.setTimeout(
+      () => lockLive('LIVE session ended — switched back to PAPER'),
+      Math.max(0, liveUntil - Date.now()),
+    );
+    return () => window.clearTimeout(id);
+  }, [mode, liveUntil, lockLive]);
+
   const handleMode = async (m: TradeMode) => {
     if (m === 'LIVE' || m === 'PAPER') {
       if (!hasLocalToken()) {
@@ -162,56 +201,51 @@ export default function App() {
         setCredOpen(true);
         return;
       }
+      let h: HealthResponse;
       try {
-        const h = await fetchHealth();
+        h = await fetchHealth();
         setHealth(h);
-        const solLive = Boolean(h.solLiveEnabled ?? h.liveEnabled);
-        if (!solLive) {
-          showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
-          return;
-        }
-        if (m === 'LIVE' && chain === 'SOL' && !h.solBroadcastEnabled) {
-          showToast('SOL transaction broadcast is disabled — PAPER remains available without it');
-          return;
-        }
-        if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
-          showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
-        }
       } catch {
+        setHealth(null);
         showToast('Server not reachable — start npm run server');
         return;
       }
-      if (m === 'LIVE' && chain === 'SOL' && !wallet.connected) {
-        showToast('Connect Phantom or Solflare first (needed as fee-payer pubkey)');
+      if (m === 'LIVE') {
+        // The unlock dialog shows every LIVE precondition and blocks on any failure.
+        setUnlockOpen(true);
         return;
       }
-      if (m === 'LIVE') {
-        const ok = window.confirm(
-          chain === 'SOL'
-            ? 'SOL LIVE spends real funds after wallet approve. Prefer PAPER first. Continue?'
-            : 'LIVE on this chain is quote/intent only. Continue?',
-        );
-        if (!ok) return;
-      } else {
-        const ok = window.confirm(
-          chain === 'SOL'
-            ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
-            : 'PAPER on this chain creates quote/copy intents only. Continue?',
-        );
-        if (!ok) return;
+      if (!(h.solLiveEnabled ?? h.liveEnabled)) {
+        showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
+        return;
       }
+      if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
+        showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
+      }
+      const ok = window.confirm(
+        chain === 'SOL'
+          ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
+          : 'PAPER on this chain creates quote/copy intents only. Continue?',
+      );
+      if (!ok) return;
     }
-    setMode(m);
-    const msg =
-      m === 'LIVE'
-        ? chain === 'SOL'
-          ? 'Mode LIVE — wallet-signed SOL Jupiter.'
-          : 'Mode LIVE — quote/intent only on this chain.'
-        : m === 'PAPER'
-          ? 'Mode PAPER — simulate only (no send). Discovery and watchlist use live screening.'
-          : 'Mode SHADOW (mock UI only).';
-    appendLog('SCREEN', 'mode', msg);
+    applyMode(m);
   };
+
+  const preflight = useMemo(
+    () => (unlockOpen ? livePreflight({
+      chain,
+      health,
+      tokenPresent: hasLocalToken(),
+      walletAddress: wallet.publicKey?.toBase58() ?? null,
+      walletName: wallet.wallet?.adapter.name ?? null,
+      rpcIsPublic: rpcKind === 'public',
+      unresolvedSignatures: loadTradeAttempts().filter(attempt =>
+        attempt.walletAddress === wallet.publicKey?.toBase58() &&
+        (attempt.status === 'submitted' || attempt.status === 'unknown')).length,
+    }) : []),
+    [unlockOpen, chain, health, wallet.publicKey, wallet.wallet, rpcKind],
+  );
 
   const handleBuyConfirm = (token: ScreenToken, amount: number, meta?: LiveBuyMeta) => {
     if (!meta?.live) {
@@ -358,13 +392,18 @@ export default function App() {
 
   return (
     <div className="app-shell" data-mode={mode}>
-      <ModeBanner mode={mode} chain={chain} />
+      <ModeBanner
+        mode={mode}
+        chain={chain}
+        liveRemainingMs={liveUntil === null ? null : Math.max(0, liveUntil - nowMs)}
+        onLock={() => lockLive('LIVE locked — switched back to PAPER')}
+      />
       <DemoBanner />
       <Header
         tab={tab}
         onTab={setTab}
         chain={chain}
-        onChain={(next) => { setChain(next); setMode('SHADOW'); setBuyToken(null); }}
+        onChain={(next) => { setChain(next); applyMode('SHADOW'); setBuyToken(null); }}
         mode={mode}
         onMode={(m) => void handleMode(m)}
         clock={clock}
@@ -451,6 +490,16 @@ export default function App() {
         onReconcile={() => { void reconcileTrades(); }}
         onClose={() => setBuyToken(null)}
         onConfirm={handleBuyConfirm}
+      />
+      <LiveUnlockDialog
+        open={unlockOpen}
+        currentMode={mode}
+        preflight={preflight}
+        onCancel={() => setUnlockOpen(false)}
+        onUnlock={(minutes) => {
+          setUnlockOpen(false);
+          applyMode('LIVE', minutes);
+        }}
       />
       <CredentialsPanel
         open={credOpen}

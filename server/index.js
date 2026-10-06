@@ -32,6 +32,7 @@ import { registerResearchRoutes } from './researchRoutes.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
+import { securityHeaders } from './securityHeaders.js';
 import { assertTradeId, authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
@@ -535,6 +536,8 @@ function writeEnvMerge(updates, { allowKeys = CRED_ENV_KEYS } = {}) {
 }
 
 export const app = express();
+app.disable('x-powered-by');
+app.use(securityHeaders({ browserRpcUrl: process.env.VITE_SOLANA_RPC_URL }));
 app.use(
   cors({
     origin: [VITE_ORIGIN, 'http://localhost:5173'],

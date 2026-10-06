@@ -160,6 +160,7 @@ async function installApiFixtures(page, scenario = {}) {
         maxNativeAmount: 0.05,
         maxPortfolioSol: 0.1,
         maxOpenPositions: 5,
+        mintSafetyRequired: true,
         maxSlippageBps: 300,
         defaultSlippageBps: 100,
         serverSigningDisabled: true,
@@ -641,4 +642,24 @@ test('LIVE inspector shows exposure and position limits and hands off to wallet 
   await expect(page.getByRole('dialog', { name: 'One-Click Buy · TEST' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign SOL swap in wallet' })).toBeDisabled();
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+});
+
+test('status bar shows the latest real activity, the server limits and that the server never signs', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  const bar = page.getByRole('contentinfo', { name: 'Status bar' });
+  await expect(bar).toContainText('limits 0.05 SOL/trade · 0.1 SOL total · 5 positions · 3% slippage · scans fail-closed');
+  await expect(bar).toContainText('server signing: disabled');
+
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  // SHADOW's mock log lines are not carried into PAPER.
+  await expect(bar).toContainText('No activity yet this session');
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
+  await discovery.getByRole('listitem').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
+  const dialog = page.getByRole('dialog', { name: /One-Click Buy/ });
+  await dialog.getByRole('checkbox', { name: /I understand PAPER/ }).check();
+  await dialog.getByRole('button', { name: 'Open paper position' }).click();
+  await expect(bar).toContainText('PAPER position opened: FOUND · 0.01 SOL');
 });

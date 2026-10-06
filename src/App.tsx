@@ -18,6 +18,7 @@ import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
 import { TokenInspector } from './components/TokenInspector';
+import { StatusBar } from './components/StatusBar';
 import type { InspectTarget } from './safetyChecks';
 import { ResearchPanel } from './components/ResearchPanel';
 import { ResearchAutomationPanel } from './components/ResearchAutomationPanel';
@@ -152,6 +153,8 @@ export default function App() {
     () => visiblePositions.reduce((s, p) => s + p.sizeSol, 0),
     [visiblePositions],
   );
+  // SHADOW shows every log line (mock data); PAPER and LIVE only show real trading activity.
+  const modeLogs = mode === 'SHADOW' ? logs : logs.filter((l) => l.category === 'live' || l.category === 'paper');
   const escapeAlerts = visiblePositions.filter((p) => p.demo && (p.alert || p.pnlPct < -10)).length;
 
   const appendLog = useCallback((kind: LogEntry['kind'], category: string, message: string) => {
@@ -463,7 +466,7 @@ export default function App() {
               />
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
               {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
-              <DecisionLog logs={logs.filter(l => l.category === 'live' || l.category === 'paper')} />
+              <DecisionLog logs={modeLogs} />
             </div>
             <TokenInspector
               key={inspect?.mint ?? 'none'}
@@ -514,7 +517,7 @@ export default function App() {
                   mode={mode}
                 />
               )}
-              <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
+              <DecisionLog logs={modeLogs} />
             </div>
             <div className="col-side">
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
@@ -529,6 +532,8 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <StatusBar lastLog={modeLogs.length > 0 ? modeLogs[modeLogs.length - 1] : null} health={health} />
 
       <BuyModal
         key={String(buyToken?.id) + mode + chain}

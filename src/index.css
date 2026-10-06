@@ -2383,3 +2383,49 @@ table.screen tr:hover td {
   font-size: 10.5px;
   line-height: 1.4;
 }
+
+/* Status bar (step 6): last activity, server limits, server signing state. */
+.status-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 26px;
+  margin-top: auto;
+  padding: 4px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.status-last {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--mode-c);
+}
+
+.status-limits {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.status-signing { white-space: nowrap; }
+.status-signing-enabled { color: var(--red); font-weight: 700; }
+.status-signing-unknown { color: var(--orange); }
+
+@media (max-width: 900px) {
+  .status-bar { flex-wrap: wrap; gap: 4px 12px; }
+  .status-last { flex-basis: 100%; }
+  .status-limits { margin-left: 0; white-space: normal; }
+}
+
+.ws-inspector > .help {
+  margin-top: 0;
+  font-size: 12px;
+}

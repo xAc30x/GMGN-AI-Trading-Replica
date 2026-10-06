@@ -721,6 +721,34 @@ test('settings is a setup checklist that shows what blocks each mode', async ({ 
   assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), null);
 });
 
+test('settings can test any mint with the server check, without trading', async ({ page }) => {
+  const counts = await installApiFixtures(page, { checks: sampleChecks, unsafeMint: inputMint.toBase58() });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const box = page.getByRole('dialog', { name: 'Setup & credentials' }).getByRole('region', { name: 'Test a mint' });
+  const input = box.getByLabel('Mint address to test');
+  const scan = box.getByRole('button', { name: 'Scan' });
+
+  // A malformed address is refused in the browser and never reaches the server.
+  await input.fill('not-a-mint');
+  await scan.click();
+  await expect(box.getByRole('alert')).toContainText('not a Solana mint address');
+  assert.equal(counts.safetyChecks, 0);
+
+  await input.fill(mintText);
+  await scan.click();
+  await expect(box.getByRole('status', { name: 'Test verdict REVIEW' })).toBeVisible();
+  await expect(box.getByRole('region', { name: 'On-chain checks' })).toContainText('Mint account found');
+
+  await input.fill(inputMint.toBase58());
+  await input.press('Enter');
+  await expect(box.getByRole('status', { name: 'Test verdict BLOCKED' })).toContainText('Freeze authority is set');
+  assert.equal(counts.safetyChecks, 2);
+  // Testing never quotes, builds, signs or sends.
+  assert.deepEqual([counts.builds, counts.sends, counts.signatures], [0, 0, 0]);
+});
+
 test('watchlist matrix view shows every check per token and lists every warning', async ({ page }) => {
   await installApiFixtures(page, { discovery: true, checks: sampleChecks });
   await installWallet(page);

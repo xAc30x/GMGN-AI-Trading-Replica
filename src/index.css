@@ -2741,6 +2741,21 @@ table.screen tr:hover td {
 .rule-effect.effect-block { background: rgba(232, 90, 74, 0.14); color: var(--red); }
 .rule-effect.effect-warn { background: rgba(232, 160, 32, 0.12); color: var(--orange); }
 
+/* Test a mint (step 9c, screen 1d). */
+.mint-test {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.mint-test h5 { margin: 0; font-size: 12.5px; }
+.mint-test .setup-note { margin: 0; }
+.mint-test .verdict .meta { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+
 @media (max-width: 720px) {
   .settings-layout { grid-template-columns: 1fr; gap: 10px; }
   .settings-nav {

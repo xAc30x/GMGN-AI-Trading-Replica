@@ -4,6 +4,7 @@ import type { HealthResponse } from '../api';
 import { fetchHealth, saveCredentials } from '../api';
 import { getLocalToken, setLocalToken } from '../localToken';
 import { ALLOWLISTED_MINTS, safetyRules } from '../safetyRules';
+import { MintTest } from './MintTest';
 import { limitRows, modeReadiness, settingsSections, setupSteps, type StepStatus } from '../setupChecklist';
 import { isPublicSolanaRpc } from '../solana/constants';
 
@@ -218,6 +219,7 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
                       GoPlus blocks. The liquidity figure comes from RugCheck, so a nonzero floor blocks while RugCheck is unavailable.
                       Change a setting in <code>server/.env</code>, then restart the backend.
                     </p>
+                    <MintTest />
                   </>
                 )}
                 {sec.steps.length > 0 && (

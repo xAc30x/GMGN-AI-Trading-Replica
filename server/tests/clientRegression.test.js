@@ -19,6 +19,7 @@ const {
   loadTradeAttempts,
   portfolioLimitBlocker,
   reconcileWalletTrades,
+  recordPartialSell,
   withWalletTrade,
 } = await loadTs('../../src/positions.ts');
 
@@ -149,4 +150,62 @@ test('wallet valuation sums matching accounts and rejects malformed balances ins
   assert.throws(() => readTokenBalance([account('1')], 'other', 'mint'), /Invalid/);
   assert.throws(() => readTokenBalance([account('1'), account('1', 9)], 'wallet', 'mint'), /Invalid/);
   assert.deepEqual(computePnl(0.01, '20000000'), { valueSol: 0.02, pnlPct: 100 });
+});
+
+test('a confirmed partial sell shrinks the tracked cost once; a full sell removes the holding', async t => {
+  const storage = new Map();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = { getItem:k => storage.get(k), setItem:(k,v) => storage.set(k,v) };
+  t.after(() => { if (prior === undefined) delete globalThis.localStorage; else globalThis.localStorage = prior; });
+  saveLivePositions([{ ...pos, sizeSol:0.04 }, { ...pos, id:'other', address:'mintB', signature:'sig-b' }]);
+  const now = Date.now();
+  const sell = (id, percent, signature) => ({ id, fingerprint:`walletA:close:mintA:mintA:${percent}`, walletAddress:'walletA',
+    mint:'mintA', side:'close', amountSol:0, percent, positionId:'mintA', signature, status:'unknown', createdAt:now, updatedAt:now });
+  storage.set('gmgn.trades.v1', JSON.stringify([sell('s1', 25, 'sell-sig-1')]));
+  const connection = { getSignatureStatuses: async signatures => ({
+    value:signatures.map(() => ({ err:null, confirmationStatus:'confirmed' })),
+  }) };
+  await reconcileWalletTrades(connection, 'walletA');
+  let held = loadLivePositions().find(p => p.address === 'mintA');
+  assert.ok(Math.abs(held.sizeSol - 0.03) < 1e-12);
+  assert.deepEqual(held.tradeSignatures, ['sig', 'sell-sig-1']);
+  // Replaying the same sell signature changes nothing.
+  assert.deepEqual(recordPartialSell(loadLivePositions(), 'walletA', 'mintA', 25, 'sell-sig-1'), loadLivePositions());
+  assert.throws(() => recordPartialSell([], 'walletA', 'mintA', 100, 'x'), /1-99/);
+  storage.set('gmgn.trades.v1', JSON.stringify([sell('s2', 100, 'sell-sig-2')]));
+  await reconcileWalletTrades(connection, 'walletA');
+  assert.deepEqual(loadLivePositions().map(p => p.address), ['mintB']);
+});
+
+test('stored sell attempts with an invalid percent are ignored', t => {
+  const storage = new Map();
+  const prior = globalThis.localStorage;
+  globalThis.localStorage = { getItem:k => storage.get(k), setItem:(k,v) => storage.set(k,v) };
+  t.after(() => { if (prior === undefined) delete globalThis.localStorage; else globalThis.localStorage = prior; });
+  const base = { id:'a', fingerprint:'f', walletAddress:'walletA', mint:'mintA', side:'close', amountSol:0, status:'unknown', createdAt:1, updatedAt:1 };
+  storage.set('gmgn.trades.v1', JSON.stringify([{ ...base, percent:0 }, { ...base, id:'b', percent:12.5 }, { ...base, id:'c', percent:'25' }, { ...base, id:'d', percent:25 }, { ...base, id:'e' }]));
+  assert.deepEqual(loadTradeAttempts().map(a => a.id), ['d', 'e']);
+});
+
+test('no new sell of a token while another sell of it is unresolved, whatever the percent', async t => {
+  const storage = new Map();
+  const previousStorage = globalThis.localStorage;
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  globalThis.localStorage = { getItem:k => storage.get(k), setItem:(k,v) => storage.set(k,v) };
+  Object.defineProperty(globalThis, 'navigator', { configurable:true,
+    value:{ locks:{ request:async (_name, _options, callback) => callback() } } });
+  t.after(() => {
+    if (previousStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = previousStorage;
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else delete globalThis.navigator;
+  });
+  const now = Date.now();
+  storage.set('gmgn.trades.v1', JSON.stringify([{ id:'pending', fingerprint:'walletA:close:mintA:mintA:25', walletAddress:'walletA',
+    mint:'mintA', side:'close', amountSol:0, percent:25, positionId:'mintA', signature:'pending-sig', status:'unknown', createdAt:now, updatedAt:now }]));
+  const close = percent => ({ walletAddress:'walletA', mint:'mintA', side:'close', amountSol:0, percent, positionId:'mintA' });
+  await assert.rejects(withWalletTrade(close(10), async () => 'must not submit'), /still pending/);
+  await assert.rejects(withWalletTrade(close(100), async () => 'must not submit'), /still pending/);
+  await assert.rejects(withWalletTrade(close(25), async () => 'must not submit'), /already has signature pending-sig/);
+  assert.equal(await withWalletTrade({ ...close(10), mint:'mintB', positionId:'mintB' }, async () => 'other token ok'), 'other token ok');
+  assert.equal(await withWalletTrade({ walletAddress:'walletA', mint:'mintA', side:'buy', amountSol:0.01 }, async () => 'buy ok'), 'buy ok');
 });

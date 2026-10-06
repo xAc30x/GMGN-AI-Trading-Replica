@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { closePaperPosition, fetchPaperPortfolio, fetchScanHistory, refreshPaperPortfolio,
   type PaperPortfolioResponse, type ScanHistoryResponse } from '../api';
+import { SELL_PERCENTS } from '../sellPercents';
 
 const sol = (v: string | null | undefined) => v == null ? '—' : (Number(v) / 1e9).toFixed(6);
 export function ResearchPanel({ version }: { version: number }) {
@@ -25,11 +26,11 @@ export function ResearchPanel({ version }: { version: number }) {
     const clockTimer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => { window.clearTimeout(initial); window.clearInterval(timer); window.clearInterval(clockTimer); };
   }, [load, version]);
-  const close = async (id: string) => {
+  const close = async (id: string, percent: number) => {
     if (lock.current) return;
     lock.current = true; setBusy(true);
     try {
-      await closePaperPosition(id);
+      await closePaperPosition(id, percent);
       setPortfolio(await fetchPaperPortfolio()); setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { lock.current = false; setBusy(false); }
@@ -53,17 +54,23 @@ export function ResearchPanel({ version }: { version: number }) {
         <p className="help">Starting cash {sol(portfolio.account.initial)} SOL. Assumptions: {portfolio.model.latencyMs / 1000}s delay,
           quote minimum output on both sides, {sol(portfolio.model.feeLamports)} SOL fee per side,
           {` ${sol(portfolio.model.entryRentLamports)}`} SOL entry rent (no refund modeled).
-          Full exits: stop {portfolio.model.stopLossPct}%, target +{portfolio.model.takeProfitPct}%, time {portfolio.model.maxHoldMs / 60000}m.
+          Sell buttons sell that share of the tokens still held; each sale pays the fee. Automatic full exits: stop {portfolio.model.stopLossPct}%, target +{portfolio.model.takeProfitPct}%, time {portfolio.model.maxHoldMs / 60000}m.
           Stops are checked about every 15s while the backend runs; fills can pass the threshold. These defaults are unvalidated.</p>
-        <div className="table-wrap"><table className="screen"><thead><tr><th>Token</th><th>Status</th><th>Entry cost</th><th>Net P&amp;L</th><th>Exit / action</th></tr></thead>
+        <div className="table-wrap"><table className="screen"><thead><tr><th>Token</th><th>Status</th><th>Cost held</th><th>Net P&amp;L</th><th>Exit / action</th></tr></thead>
           <tbody>{portfolio.positions.length === 0 && <tr><td colSpan={5}>No paper positions. Select a coin in PAPER to start tracking.</td></tr>}
             {portfolio.positions.map(p => {
               const fresh = p.mark && !p.lastError && clock - p.mark.at <= 45000;
               return <tr key={p.id}><td title={p.mint}>{p.symbol}<div className="meta">{new Date(p.openedAt).toLocaleString()}</div></td>
                 <td>{p.state}{p.exitPending && <div className="meta">Exit pending: {p.exitPending}</div>}{p.lastError && <div className="safe-bad">{p.lastError}</div>}</td>
-                <td>{sol(p.costLamports)} SOL</td><td>{p.state === 'closed' ? `${sol(p.realisedPnlLamports)} SOL`
-                  : fresh ? `${p.mark!.pnlPct.toFixed(2)}%` : 'Awaiting fresh quote'}</td>
-                <td>{p.state === 'closed' ? p.exitReason : <button className="btn-ghost" disabled={busy || !portfolio.monitoringEnabled} onClick={() => void close(p.id)}>Close paper</button>}</td></tr>;
+                <td>{sol(p.costLamports)} SOL{p.partialExits?.length ? <div className="meta">after {p.partialExits.length} partial sell{p.partialExits.length > 1 ? 's' : ''}</div> : null}</td>
+                <td>{p.state === 'closed' ? `${sol(p.realisedPnlLamports)} SOL`
+                  : fresh ? `${p.mark!.pnlPct.toFixed(2)}%` : 'Awaiting fresh quote'}
+                  {p.state === 'open' && p.realisedPnlLamports != null && <div className="meta">Realized so far {sol(p.realisedPnlLamports)} SOL</div>}</td>
+                <td>{p.state === 'closed' ? p.exitReason : <div className="sell-pcts" role="group" aria-label={`Sell paper ${p.symbol}`}>
+                  {SELL_PERCENTS.map(pct => <button key={pct} type="button" className="btn-ghost" disabled={busy || !portfolio.monitoringEnabled || (pct < 100 && Boolean(p.exitPending))}
+                    aria-label={`Sell ${pct}%`} title={pct === 100 ? 'Close the whole paper position' : `Sell ${pct}% of the tokens still held`}
+                    onClick={() => void close(p.id, pct)}>{pct}%</button>)}
+                </div>}</td></tr>;
             })}</tbody></table></div>
         <p className="help">Equity is unavailable when any open position lacks a fresh executable quote. Provider failures do not close positions or charge simulated execution fees.</p>
       </>}

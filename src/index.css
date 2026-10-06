@@ -1320,6 +1320,9 @@ table.screen tr:hover td {
   border-radius: 8px;
 }
 
+.pos-item { flex-wrap: wrap; }
+.pos-item .sell-pcts { flex-basis: 100%; justify-content: flex-end; }
+
 .pos-item.alert {
   border-color: var(--orange-dim);
   background: rgba(232, 160, 32, 0.06);
@@ -2228,6 +2231,8 @@ table.screen tr:hover td {
 
 .research-panel .help { font-size: 12px; line-height: 1.6; color: #b7b0a2; }
 .research-panel table.screen { min-width: 640px; }
+.sell-pcts { display: flex; flex-wrap: wrap; gap: 4px; }
+.sell-pcts .btn-ghost { padding: 5px 8px; font-size: 12px; }
 
 .research-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; }
 .research-controls [role="status"] { font-size: 12px; }

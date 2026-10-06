@@ -46,6 +46,7 @@ import {
   INITIAL_TOKENS,
 } from './data/mockData';
 import type { Chain, LogEntry, Position, ScreenToken, TabId, TradeMode } from './types';
+import type { SellPercent } from './sellPercents';
 
 function utcClock(): string {
   const d = new Date();
@@ -322,9 +323,10 @@ export default function App() {
     showToast('Intent recorded — complete the trade in your wallet / gmgn.ai');
   };
 
-  const handleClosePosition = async (id: string) => {
+  const handleClosePosition = async (id: string, percent: SellPercent) => {
     const pos = positions.find((p) => p.id === id);
     if (!pos) return;
+    const full = percent === 100;
 
     if (mode !== 'LIVE' && !pos.demo) {
       showToast('Live holdings can only be closed in LIVE with wallet approval.');
@@ -353,23 +355,25 @@ export default function App() {
         return;
       }
       const ok = window.confirm(
-        `SOL LIVE close ${pos.symbol}: sell 100% of this mint in your connected wallet via Jupiter? Your wallet must approve.`,
+        full
+          ? `SOL LIVE close ${pos.symbol}: sell 100% of this mint in your connected wallet via Jupiter? Your wallet must approve.`
+          : `SOL LIVE partial sell ${pos.symbol}: sell ${percent}% of this mint's balance in your connected wallet via Jupiter? The rest stays open. Your wallet must approve.`,
       );
       if (!ok) return;
       try {
         const res = await signAndSendSolClose({
           wallet,
           inputMint: pos.address,
-          percent: 100,
+          percent,
           slippageBps: 100,
         });
         setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         appendLog(
           'SELL',
           'live',
-          `SOL wallet close ${pos.symbol} · tx ${res.signature.slice(0, 10)}…`,
+          `SOL wallet ${full ? 'close' : `sell ${percent}%`} ${pos.symbol} · tx ${res.signature.slice(0, 10)}…`,
         );
-        showToast(`Closed · ${res.signature.slice(0, 12)}…`);
+        showToast(`${full ? 'Closed' : `Sold ${percent}%`} · ${res.signature.slice(0, 12)}…`);
       } catch (e) {
         setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         void reconcileTrades();
@@ -378,11 +382,15 @@ export default function App() {
       return;
     }
 
-    setPositions((prev) => prev.filter((p) => p.id !== id));
+    // Demo (SHADOW) rows: a partial sell shrinks the demo size; nothing is traded.
+    const soldSol = pos.sizeSol * percent / 100;
+    setPositions((prev) => full
+      ? prev.filter((p) => p.id !== id)
+      : prev.map((p) => p.id === id ? { ...p, sizeSol: p.sizeSol - soldSol } : p));
     appendLog(
       'SELL',
       'shadow',
-      `Closed ${pos.symbol} @ ${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(1)}% · ${pos.sizeSol} ${chain}`,
+      `${full ? 'Closed' : `Sold ${percent}% of`} ${pos.symbol} @ ${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(1)}% · ${soldSol.toFixed(4)} ${chain}`,
     );
   };
 
@@ -467,7 +475,7 @@ export default function App() {
                 selectedMint={inspect?.mint ?? null}
                 onSelect={setInspect}
               />
-              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id, percent) => void handleClosePosition(id, percent)} />
               <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
               {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={modeLogs} />
@@ -533,7 +541,7 @@ export default function App() {
               <DecisionLog logs={modeLogs} />
             </div>
             <div className="col-side">
-              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id, percent) => void handleClosePosition(id, percent)} />
               <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}

@@ -15,6 +15,8 @@ export interface TradeAttempt {
   symbol?: string;
   side: 'buy' | 'close';
   amountSol: number;
+  /** Close only: share of the wallet's token balance sold (1-100). Missing means 100. */
+  percent?: number;
   positionId?: string;
   signature?: string;
   blockhash?: string;
@@ -93,6 +95,7 @@ export function loadTradeAttempts(): TradeAttempt[] {
     return value.filter(attempt => attempt && typeof attempt.id === 'string' &&
       typeof attempt.walletAddress === 'string' && typeof attempt.mint === 'string' &&
       ['buy', 'close'].includes(attempt.side) && Number.isFinite(attempt.amountSol) &&
+      (attempt.percent === undefined || (Number.isInteger(attempt.percent) && attempt.percent >= 1 && attempt.percent <= 100)) &&
       ['preparing', 'submitted', 'confirmed', 'failed', 'unknown'].includes(attempt.status));
   } catch {
     return [];
@@ -112,10 +115,10 @@ export function updateTradeAttempt(id: string, patch: Partial<TradeAttempt>): Tr
   return attempts[index];
 }
 
-function fingerprint(input: Pick<TradeAttempt, 'walletAddress' | 'mint' | 'side' | 'amountSol' | 'positionId'>): string {
+function fingerprint(input: Pick<TradeAttempt, 'walletAddress' | 'mint' | 'side' | 'amountSol' | 'positionId' | 'percent'>): string {
   return [input.walletAddress, input.side, input.mint, input.side === 'buy'
     ? input.amountSol.toFixed(9)
-    : input.positionId || 'all'].join(':');
+    : `${input.positionId || 'all'}:${input.percent ?? 100}`].join(':');
 }
 
 export async function withWalletTrade<T>(
@@ -142,6 +145,12 @@ export async function withWalletTrade<T>(
       throw new Error(duplicate.signature
         ? `Matching trade already has signature ${duplicate.signature}; reconcile before retrying`
         : 'Matching trade is already in progress; reconcile before retrying');
+    }
+    // A sell is sized from the wallet balance, so never size one while another sell of this mint is unresolved.
+    if (input.side === 'close' && attempts.some(attempt => attempt.side === 'close' &&
+      attempt.walletAddress === input.walletAddress && attempt.mint === input.mint && ACTIVE_STATUSES.has(attempt.status))) {
+      saveTradeAttempts(attempts);
+      throw new Error('Another sell of this token is still pending; reconcile before selling again');
     }
     if (input.side === 'buy' && limits) {
       const blocker = portfolioLimitBlocker({
@@ -241,6 +250,32 @@ export function removeConfirmedPosition(walletAddress: string, mint: string): vo
     !(position.demo === false && position.walletAddress === walletAddress && position.address === mint)));
 }
 
+/**
+ * Shrinks the tracked cost of a holding after a confirmed partial sell, so P&L compares
+ * the tokens still held with their share of the cost. Idempotent by sell signature.
+ */
+export function recordPartialSell(positions: Position[], walletAddress: string, mint: string,
+  percent: number, signature: string): Position[] {
+  if (!Number.isInteger(percent) || percent < 1 || percent >= 100) throw new Error('Partial sell percent must be 1-99');
+  return positions.map(position => {
+    if (position.demo !== false || position.walletAddress !== walletAddress || position.address !== mint) return position;
+    const signatures = position.tradeSignatures || (position.signature ? [position.signature] : []);
+    if (signatures.includes(signature)) return position;
+    return { ...position, sizeSol: position.sizeSol * (100 - percent) / 100, tradeSignatures: [...signatures, signature] };
+  });
+}
+
+/** Applies a confirmed sell: a full sell removes the holding, a partial sell shrinks it. */
+export function applyConfirmedClose(attempt: TradeAttempt): void {
+  const percent = attempt.percent ?? 100;
+  if (percent >= 100) {
+    removeConfirmedPosition(attempt.walletAddress, attempt.mint);
+    return;
+  }
+  if (!attempt.signature) return;
+  writePositions(recordPartialSell(readPositions(), attempt.walletAddress, attempt.mint, percent, attempt.signature));
+}
+
 export async function reconcileWalletTrades(connection: {
   getSignatureStatuses: (signatures: string[], options: { searchTransactionHistory: boolean }) =>
     Promise<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>;
@@ -265,7 +300,7 @@ export async function reconcileWalletTrades(connection: {
     } else if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
       const confirmed = updateTradeAttempt(attempt.id, { status: 'confirmed', error: undefined });
       if (confirmed?.side === 'buy') addConfirmedBuy(confirmed);
-      if (confirmed?.side === 'close') removeConfirmedPosition(confirmed.walletAddress, confirmed.mint);
+      if (confirmed?.side === 'close') applyConfirmedClose(confirmed);
     }
   });
   return loadTradeAttempts();

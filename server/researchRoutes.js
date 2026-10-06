@@ -43,7 +43,9 @@ export function registerResearchRoutes(app, { requireLocalToken, requireLiveFlag
   }));
   app.post('/api/paper/close', requireLocalToken, requireLiveFlag, route(async req => {
     if (typeof req.body?.id !== 'string') throw Object.assign(new Error('Paper position id required'), { status: 400 });
-    return { position: await engine.close(req.body.id) };
+    const percent = req.body.percent ?? 100;
+    if (typeof percent !== 'number') throw Object.assign(new Error('Sell percent must be a number'), { status: 400 });
+    return { position: await engine.sell(req.body.id, percent) };
   }));
   app.post('/api/paper/refresh', requireLocalToken, requireLiveFlag, route(async () => {
     await refresh();

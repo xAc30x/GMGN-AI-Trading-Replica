@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import type { Position } from '../types';
 import type { LivePnl } from '../useLivePnl';
 import { formatAgo } from '../pnl';
+import { SELL_PERCENTS, type SellPercent } from '../sellPercents';
 
 interface Props {
   positions: Position[];
-  onClose: (id: string) => void;
+  /** Sell `percent` of a holding; 100 closes it. */
+  onClose: (id: string, percent: SellPercent) => void;
   livePnl?: Record<string, LivePnl>;
   refreshing?: boolean;
 }
@@ -71,9 +73,15 @@ export function PositionEscapeMonitor({ positions, onClose, livePnl = {}, refres
             ) : (
               <LivePnlCell p={p} v={livePnl[p.id]} />
             )}
-            <button type="button" className="close-btn" onClick={() => onClose(p.id)}>
-              Close
-            </button>
+            <div className="sell-pcts" role="group" aria-label={`Sell ${p.symbol}`}>
+              {SELL_PERCENTS.map((pct) => (
+                <button key={pct} type="button" className="close-btn" aria-label={`Sell ${pct}%`}
+                  title={pct === 100 ? 'Sell everything and close this holding' : `Sell ${pct}% of the tokens still held`}
+                  onClick={() => onClose(p.id, pct)}>
+                  {pct}%
+                </button>
+              ))}
+            </div>
           </div>
         ))}
       </div>

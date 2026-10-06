@@ -9,6 +9,7 @@ import { GateFunnel } from './components/GateFunnel';
 import { Header } from './components/Header';
 import { MetricCards } from './components/MetricCards';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
+import { LivePositionChart } from './components/LivePositionChart';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
@@ -425,6 +426,7 @@ export default function App() {
             </div>
             <div className="col-side">
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <LivePositionChart positions={trackedPositions} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}

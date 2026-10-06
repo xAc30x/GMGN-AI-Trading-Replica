@@ -159,6 +159,7 @@ async function executeSolClose(args: {
     await requireMintSafe(inputMint);
     const bal = await getTokenBalanceAtomic(wallet.publicKey!, inputMint);
     const built = await fetchSolCloseTx({
+      tradeId: attempt.id,
       inputMint,
       balanceAtomic: bal.amountAtomic,
       percent,

@@ -273,6 +273,7 @@ export function fetchMintSafety(mint: string): Promise<MintSafetyResponse> {
 }
 
 export function fetchSolCloseTx(body: {
+  tradeId: string;
   inputMint: string;
   amountAtomic?: string;
   balanceAtomic?: string;

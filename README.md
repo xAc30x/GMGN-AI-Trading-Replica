@@ -110,6 +110,12 @@ Wallet signing removes hot-key custody from this app. You can still lose money t
 Requires Node 22.13+ for the built-in SQLite reservation ledger. Client regression tests use the project's TypeScript compiler.
 Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm run lint.
 
+Broadcast-boundary acceptance checks run with `npm run test:broadcast-safety`
+and are also included in `npm test`. All 10 previously failing safety cases now
+pass, with additional expiry, recovery, concurrency, and close coverage. See
+[the validation record](docs/validation/broadcast-boundary-2026-09-29.md) for
+fixture isolation, reproduction commands, results, and remaining limits.
+
 - Transaction builds obtain a fresh server-owned ExactIn quote. Caller quotes are ignored.
   Mints, exact input amount, slippage, minimum output and price impact are validated.
   Preview prices can change; review the final transaction in your wallet.
@@ -124,12 +130,34 @@ Run verification with npm ci --ignore-scripts, npm test, npm run build, and npm 
   and are checked again when that wallet reconnects. Inspect unknown signatures before retrying.
 - Web Locks serialize wallet actions across tabs. A persisted trade ID and signed-payload hash
   make RPC retries idempotent; a reused ID with different bytes is rejected.
+- Every LIVE buy/close build now saves an immutable authorization for the exact
+  unsigned v0 message, requested wallet, server-owned quote and expiry. Close
+  requests require `tradeId`, just like buys. PAPER builds receive no authorization.
+  Changed messages, missing authorizations and expired builds cannot broadcast.
+- Broadcast authorization and replay claims use SQLite `BEGIN IMMEDIATE`,
+  `synchronous=FULL`, and mode 0600. The file is `server/.trade-ledger.json.sqlite`
+  by default, or `GMGN_TRADE_LEDGER_PATH` plus `.sqlite`. Old JSON claim IDs,
+  payload hashes and known signatures migrate once as blocking tombstones; the
+  JSON file is retained. Malformed legacy data or corrupt SQLite fails closed.
+  Message hashes and signatures cannot be reassigned to other trade IDs.
+- Before dispatch, the signature is durably claimed and a buy must still have its
+  matching active portfolio reservation. Same-ID accepted retries return the exact
+  cached signature. Pending/uncertain claims never dispatch again automatically,
+  including after restart or an RPC error/malformed response/signature mismatch.
+  The proxy forces preflight on and RPC `maxRetries=0`.
+  Keep both SQLite ledgers on persistent local storage shared by all backend
+  processes. They are not a distributed transaction or multi-host system; restore
+  consistent backups only with broadcasting disabled. Old unsigned builds must
+  be rebuilt through the updated service; do not erase claims to retry a trade.
 - Before wallet approval, the browser independently decodes the unsigned v0 message,
   resolves every address lookup table, checks wallet authority and trade-mint accounts,
   accepts only the supported Jupiter Route exact-in instruction (up to five known
   route steps) and approved setup programs,
   matches exact amounts/slippage/minimum output, and bounds network/platform fees.
   Unexpected transfers and unsupported instructions fail closed.
+  Exact-message binding does not prove that the provider originally constructed
+  the correct transaction. Full positional Jupiter account-schema validation
+  remains separate work; the existing browser policy is not a comprehensive audit.
 - Buy limits are computed by the server from fresh SPL Token and Token-2022 balances,
   valued as the sum of fresh Jupiter ExactIn minimum-output SOL quotes. Pending buy
   amounts are reserved atomically in a durable server ledger before Jupiter builds.

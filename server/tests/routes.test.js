@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { Connection, Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
+import { authorizeBroadcast } from '../tradeLedger.js';
+import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 let app;
 
 const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -15,6 +17,7 @@ const flags = Object.fromEntries(['non_transferable','closable','transfer_hook',
 test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', async t => {
   const oldLive = process.env.GMGN_LIVE;
   const oldToken = process.env.GMGN_LOCAL_TOKEN;
+  const oldTradePath = process.env.GMGN_TRADE_LEDGER_PATH;
   const oldPortfolioPath = process.env.GMGN_PORTFOLIO_LEDGER_PATH;
   const oldRpcUrl = process.env.SOLANA_RPC_URL;
   const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-portfolio-route-'));
@@ -41,11 +44,13 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   await new Promise(resolve => rpcFixture.listen(0,'127.0.0.1',resolve));
   process.env.GMGN_LIVE='1';
   process.env.GMGN_LOCAL_TOKEN='test-only-local-token';
+  process.env.GMGN_TRADE_LEDGER_PATH=path.join(portfolioDir, 'trades.json');
   process.env.GMGN_PORTFOLIO_LEDGER_PATH=path.join(portfolioDir, 'portfolio.sqlite');
   process.env.SOLANA_RPC_URL=`http://127.0.0.1:${rpcFixture.address().port}`;
   t.after(async () => {
     if (oldLive === undefined) delete process.env.GMGN_LIVE; else process.env.GMGN_LIVE=oldLive;
     if (oldToken === undefined) delete process.env.GMGN_LOCAL_TOKEN; else process.env.GMGN_LOCAL_TOKEN=oldToken;
+    if (oldTradePath === undefined) delete process.env.GMGN_TRADE_LEDGER_PATH; else process.env.GMGN_TRADE_LEDGER_PATH=oldTradePath;
     if (oldPortfolioPath === undefined) delete process.env.GMGN_PORTFOLIO_LEDGER_PATH; else process.env.GMGN_PORTFOLIO_LEDGER_PATH=oldPortfolioPath;
     if (oldRpcUrl === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL=oldRpcUrl;
     fs.rmSync(portfolioDir,{ recursive:true,force:true });
@@ -77,7 +82,11 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
     }
     if (url.hostname === 'lite-api.jup.ag' && url.pathname.endsWith('/swap')) {
       builtQuote=JSON.parse(init.body).quoteResponse;
-      return Response.json({ swapTransaction:'unsigned-test-fixture',lastValidBlockHeight:123 });
+      const tx = new VersionedTransaction(new TransactionMessage({
+        payerKey: new PublicKey(JSON.parse(init.body).userPublicKey),
+        recentBlockhash: Keypair.generate().publicKey.toBase58(), instructions: [],
+      }).compileToV0Message());
+      return Response.json({ swapTransaction:Buffer.from(tx.serialize()).toString('base64'),lastValidBlockHeight:123 });
     }
     throw Error('Unexpected network request: '+url.hostname);
   });
@@ -125,11 +134,11 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   wrongUpstream=false;
   assert.equal((await request('/api/swap',body)).status,410);
   assert.equal((await request('/api/close',body)).status,410);
-  assert.equal((await request('/api/sol/close-tx',{ userPublicKey:sol,inputMint:mint,
+  assert.equal((await request('/api/sol/close-tx',{ tradeId:'controlled-close-trade-0001',userPublicKey:sol,inputMint:mint,
     amountAtomic:'100',slippageBps:100,confirm:true,mode:'LIVE' })).status,200);
   assert.equal(builtQuote.inputMint,mint);
   assert.equal(builtQuote.outputMint,sol);
-  assert.equal((await request('/api/sol/close-tx',{ userPublicKey:sol,inputMint:mint,
+  assert.equal((await request('/api/sol/close-tx',{ tradeId:'controlled-close-trade-0001',userPublicKey:sol,inputMint:mint,
     amountAtomic:'1001',slippageBps:100,confirm:true,mode:'LIVE' })).status,400);
 });
 
@@ -150,6 +159,21 @@ test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation'
     if (oldLedgerPath === undefined) delete process.env.GMGN_TRADE_LEDGER_PATH; else process.env.GMGN_TRADE_LEDGER_PATH = oldLedgerPath;
     fs.rmSync(ledgerDir, { recursive: true, force: true });
   });
+  const oldRpc = process.env.SOLANA_RPC_URL;
+  const rpc = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(body.method, 'getBlockHeight');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: 1 }));
+  });
+  await new Promise(resolve => rpc.listen(0, '127.0.0.1', resolve));
+  process.env.SOLANA_RPC_URL = `http://127.0.0.1:${rpc.address().port}`;
+  t.after(async () => {
+    await new Promise(resolve => rpc.close(resolve));
+    if (oldRpc === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL = oldRpc;
+  });
   const forwarded = [];
   let failNextBroadcast = false;
   t.mock.method(globalThis, 'fetch', async (_url, init) => {
@@ -159,10 +183,13 @@ test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation'
       failNextBroadcast = false;
       throw new Error('fixture response lost after dispatch');
     }
-    return Response.json({ jsonrpc:'2.0', id:7, result:'mock-only' });
+    const payload = JSON.parse(init.body);
+    const signature = method === 'sendTransaction'
+      ? bs58.encode(VersionedTransaction.deserialize(Buffer.from(payload.params[0], 'base64')).signatures[0]) : 'mock-only';
+    return Response.json({ jsonrpc:'2.0', id:7, result:signature });
   });
-  if (!app) ({ app } = await import('../index.js'));
-  const server = app.listen(0, '127.0.0.1');
+  const { app: rpcApp } = await import('../index.js?rpc-gate-fixture');
+  const server = rpcApp.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const request = (body, token='rpc-test-token', tradeId) => new Promise((resolve, reject) => {
@@ -189,22 +216,27 @@ test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation'
   process.env.GMGN_SOL_BROADCAST = '1';
   const tradeId = 'rpc-test-trade-id-1';
   const signingWallet=Keypair.generate();
-  const signedPayload=() => {
+  const signedPayload=(authorizedId) => {
     const transaction=new VersionedTransaction(new TransactionMessage({
       payerKey:signingWallet.publicKey,
       recentBlockhash:Keypair.generate().publicKey.toBase58(),
       instructions:[],
     }).compileToV0Message());
+    if (authorizedId) authorizeBroadcast({ tradeId: authorizedId,
+      swapTransaction: Buffer.from(transaction.serialize()).toString('base64'),
+      walletAddress: signingWallet.publicKey.toBase58(), side:'close',mode:'LIVE',lastValidBlockHeight:123,
+      intent: { inputMint: mint, outputMint: sol, inAmount: '100' },
+    });
     transaction.sign([signingWallet]);
     return Buffer.from(transaction.serialize()).toString('base64');
   };
-  const signedTx = { ...call('sendTransaction'), params:[signedPayload()] };
+  const signedTx = { ...call('sendTransaction'), params:[signedPayload(tradeId)] };
   assert.equal(await request(signedTx, 'rpc-test-token', tradeId), 200);
   assert.equal(await request(signedTx, 'rpc-test-token', tradeId), 200);
   assert.equal(await request({ ...signedTx, params:[signedPayload()] }, 'rpc-test-token', tradeId), 409);
   assert.deepEqual(forwarded, ['getBalance','getSignatureStatuses','simulateTransaction','sendTransaction']);
-  const uncertainTrade = { ...signedTx, params:[signedPayload()] };
   const uncertainId = 'rpc-test-uncertain-id';
+  const uncertainTrade = { ...signedTx, params:[signedPayload(uncertainId)] };
   failNextBroadcast = true;
   assert.equal(await request(uncertainTrade, 'rpc-test-token', uncertainId), 502);
   assert.equal(await request(uncertainTrade, 'rpc-test-token', uncertainId), 409);

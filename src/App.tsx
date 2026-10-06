@@ -465,7 +465,19 @@ export default function App() {
               {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={logs.filter(l => l.category === 'live' || l.category === 'paper')} />
             </div>
-            <TokenInspector key={inspect?.mint ?? 'none'} target={inspect} onClose={() => setInspect(null)} />
+            <TokenInspector
+              key={inspect?.mint ?? 'none'}
+              target={inspect}
+              onClose={() => setInspect(null)}
+              mode={mode}
+              health={health}
+              amount={buyAmount}
+              onAmount={setBuyAmount}
+              liveExposureSol={exposure}
+              liveOpenMints={visiblePositions.flatMap((p) => (p.address ? [p.address] : []))}
+              paperVersion={paperVersion}
+              onTrade={(t) => setBuyToken(t.buyToken)}
+            />
           </div>
         ) : (
           <div className="token-layout">

@@ -141,7 +141,7 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch, selectedMint, o
                 className="discover-id row-select"
                 aria-pressed={selectedMint === t.mint}
                 aria-label={`Inspect ${t.symbol || shortMint(t.mint)}`}
-                onClick={() => onSelect({ mint: t.mint, symbol: t.symbol || shortMint(t.mint), source: 'discover', discovered: t })}
+                onClick={() => onSelect({ mint: t.mint, symbol: t.symbol || shortMint(t.mint), source: 'discover', discovered: t, buyToken: toBuyToken(t) })}
               >
                 <span className="sym">{t.symbol || shortMint(t.mint)}</span>
                 <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>

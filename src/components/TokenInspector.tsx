@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchMintSafety, type MintSafetyResponse, type WatchlistScanItem } from '../api';
+import { fetchMintSafety, type HealthResponse, type MintSafetyResponse, type WatchlistScanItem } from '../api';
 import { age, usd } from '../format';
-import { safetyVerdict, type InspectTarget } from '../safetyChecks';
+import { checkStatus, safetyVerdict, type InspectTarget } from '../safetyChecks';
+import type { TradeMode } from '../types';
+import { InspectorTrade } from './InspectorTrade';
 import { SafetyCheckList } from './SafetyChecks';
 
 interface Props {
   target: InspectTarget | null;
   onClose: () => void;
+  mode: TradeMode;
+  health: HealthResponse | null;
+  amount: number;
+  onAmount: (n: number) => void;
+  liveExposureSol: number;
+  liveOpenMints: string[];
+  paperVersion: number;
+  /** Opens the existing buy dialog for this token at the chosen amount. */
+  onTrade: (target: InspectTarget) => void;
 }
 
 type SafetyResult = MintSafetyResponse | WatchlistScanItem;
@@ -22,7 +33,7 @@ function pctText(n: number | null | undefined): string {
  * summary, so the full checks are fetched once when the token is opened.
  * Render with key={mint} so each token starts with fresh state.
  */
-export function TokenInspector({ target, onClose }: Props) {
+export function TokenInspector({ target, onClose, mode, health, amount, onAmount, liveExposureSol, liveOpenMints, paperVersion, onTrade }: Props) {
   const [fetched, setFetched] = useState<SafetyResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -74,6 +85,9 @@ export function TokenInspector({ target, onClose }: Props) {
       : null;
   const blockers = result?.blockers ?? d?.safety.blockers ?? [];
   const warnings = result?.warnings ?? d?.safety.warnings ?? [];
+  // What the user acknowledges: the warning checks themselves, or the server's warning list if none are marked.
+  const warnChecks = (result?.checks ?? []).filter((c) => checkStatus(c) === 'warn').map((c) => c.detail.replace(/^warn:\s*/i, ''));
+  const ackWarnings = warnChecks.length > 0 ? warnChecks : warnings;
 
   const stats: [string, string][] = [];
   if (d) {
@@ -156,6 +170,23 @@ export function TokenInspector({ target, onClose }: Props) {
       {err && <div className="cred-msg err">{err}</div>}
       {result && <SafetyCheckList checks={result.checks} />}
       {!result && !loading && !err && <p className="help">No checks yet.</p>}
+
+      <InspectorTrade
+        key={mode}
+        mode={mode}
+        mint={target.mint}
+        verdict={result ? safetyVerdict(result) : null}
+        checked={Boolean(result) && !loading}
+        checking={loading}
+        warnings={ackWarnings}
+        health={health}
+        amount={amount}
+        onAmount={onAmount}
+        liveExposureSol={liveExposureSol}
+        liveOpenMints={liveOpenMints}
+        paperVersion={paperVersion}
+        onTrade={() => onTrade(target)}
+      />
     </aside>
   );
 }

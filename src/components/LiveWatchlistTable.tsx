@@ -209,7 +209,7 @@ export function LiveWatchlistTable({ buyAmount, onBuyAmount, onBuy, mode, select
                         className="token-cell row-select"
                         aria-pressed={selectedMint === t.address}
                         aria-label={`Inspect ${t.symbol}`}
-                        onClick={() => onSelect({ mint: t.address || t.id, symbol: t.symbol, source: 'watchlist', scan })}
+                        onClick={() => onSelect({ mint: t.address || t.id, symbol: t.symbol, source: 'watchlist', scan, buyToken: t })}
                       >
                         <span className="sym">{t.symbol}</span>
                         <span className="meta">{t.age}</span>

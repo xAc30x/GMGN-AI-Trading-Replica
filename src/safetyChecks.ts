@@ -1,4 +1,5 @@
 import type { DiscoveredToken, MintSafetyCheck, WatchlistScanItem } from './api';
+import type { ScreenToken } from './types';
 
 /** The token shown in the inspector, with whatever data the list that selected it already had. */
 export interface InspectTarget {
@@ -7,6 +8,8 @@ export interface InspectTarget {
   source: 'discover' | 'watchlist';
   discovered?: DiscoveredToken;
   scan?: WatchlistScanItem;
+  /** What the existing buy dialog needs, built by the list the row came from. */
+  buyToken: ScreenToken;
 }
 
 export type CheckStatus = 'pass' | 'warn' | 'fail';

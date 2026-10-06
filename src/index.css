@@ -2269,3 +2269,117 @@ table.screen tr:hover td {
   background: var(--bg-elev);
   border-color: var(--border-soft);
 }
+
+/* Inspector trade controls (step 5b). The button uses the mode color; lime stays reserved for passed checks. */
+.inspector-trade {
+  position: sticky;
+  bottom: -14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px 14px 14px;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.amount-seg button {
+  flex: 1;
+  font-family: var(--mono);
+}
+
+.amount-seg button[aria-pressed='true'] {
+  background: var(--mode-tint);
+  color: var(--mode-c);
+  box-shadow: inset 0 0 0 1px var(--mode-c);
+}
+
+.rails {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 8px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.rail-value {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.rail-bar {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.rail-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--mode-c);
+}
+
+.rail-near .rail-bar > span { background: var(--orange); }
+.rail-over .rail-bar > span { background: var(--red); }
+.rail-over .rail-value { color: var(--red); }
+
+.exit-note {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--tan);
+}
+
+.ack-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--orange-dim);
+  border-radius: 7px;
+  background: rgba(232, 160, 32, 0.07);
+  color: var(--orange);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ack-box input {
+  margin-top: 2px;
+  accent-color: var(--orange);
+}
+
+.trade-btn {
+  padding: 10px 0;
+  border-radius: 8px;
+  border: 1px solid var(--mode-c);
+  background: var(--mode-c);
+  color: #110f0c;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+
+.trade-btn:disabled {
+  background: transparent;
+  border-color: var(--border-soft);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
+.inspector-trade .help {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+}

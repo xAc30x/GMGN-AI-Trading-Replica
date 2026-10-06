@@ -70,8 +70,10 @@ function unsignedSwap({ unsafe = false, sell = null } = {}) {
   return base64(transaction.serialize());
 }
 
-// The first-launch tour covers the page; these tests start as a returning user who has already seen it.
-test.beforeEach(async ({ page }) => {
+// The first-launch tour covers the page; tests start as a returning user who has already seen it,
+// except tests tagged @first-visit, which check the tour itself.
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.tags.includes('@first-visit')) return;
   await page.addInitScript(() => { localStorage.setItem('gmgn.tutorial.seen.v1', 'true'); });
 });
 
@@ -955,4 +957,85 @@ test('the Experimental switch in Settings turns the live chart on under open pos
   await expect(panel.locator('iframe')).toHaveCount(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(setup.getByRole('region', { name: 'Experimental' }).getByRole('switch', { name: 'Live position chart' })).not.toBeChecked();
+});
+
+/** True when the tour's highlight box fully surrounds the element. */
+async function spotlightCovers(page, locator) {
+  const spot = await page.locator('.tour-spot').boundingBox();
+  const el = await locator.boundingBox();
+  if (!spot || !el) return false;
+  return spot.x <= el.x && spot.y <= el.y && spot.x + spot.width >= el.x + el.width && spot.y + spot.height >= el.y + el.height;
+}
+
+test('first launch shows the tour, blocks the page while open, and Skip hides it for good', { tag: '@first-visit' }, async ({ page }) => {
+  await page.goto('/');
+  const tour = page.getByRole('dialog', { name: 'Welcome to AI Trader' });
+  await expect(tour).toBeVisible();
+  await expect(tour).toContainText('Step 1 of 14');
+  await expect(page.locator('.tour-spot')).toHaveCount(0);
+
+  // The page underneath cannot be clicked while the tour is open.
+  const paper = page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' });
+  await expect(paper.click({ trial: true, timeout: 1_000 })).rejects.toThrow();
+
+  await tour.getByRole('button', { name: 'Next' }).click();
+  const modeStep = page.getByRole('dialog', { name: 'Trading mode' });
+  await expect(modeStep).toContainText('Step 2 of 14');
+  await expect.poll(() => spotlightCovers(page, page.getByRole('group', { name: 'Trading mode' }))).toBe(true);
+  await modeStep.getByRole('button', { name: 'Back' }).click();
+  await expect(page.getByRole('dialog', { name: 'Welcome to AI Trader' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Skip tour' }).click();
+  await expect(page.locator('.tour-card')).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.tutorial.seen.v1')), 'true');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'SHADOW');
+
+  await page.reload();
+  await expect(page.getByRole('group', { name: 'Trading mode' })).toBeVisible();
+  await expect(page.locator('.tour-card')).toHaveCount(0);
+});
+
+test('the tour explains panels hidden in SHADOW and can be finished from the keyboard', { tag: '@first-visit' }, async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('dialog', { name: 'Welcome to AI Trader' })).toBeFocused();
+  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight');
+  const discover = page.getByRole('dialog', { name: 'Discover' });
+  await expect(discover).toContainText('Step 7 of 14');
+  await expect(discover).toContainText('This panel appears when you switch to PAPER or LIVE on the SOL chain.');
+  await expect(page.locator('.tour-spot')).toHaveCount(0);
+
+  for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowRight');
+  const done = page.getByRole('dialog', { name: "You're ready" });
+  await expect(done).toContainText('Step 14 of 14');
+  await expect(done.getByRole('button', { name: 'Skip tour' })).toHaveCount(0);
+  await done.getByRole('button', { name: 'Finish' }).click();
+  await expect(page.locator('.tour-card')).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.tutorial.seen.v1')), 'true');
+});
+
+test('Settings replays the tour on the Trade page and highlights the PAPER workspace panels', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await expect(page.locator('.tour-card')).toHaveCount(0);
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'PAPER');
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Research' }).click();
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Setup & credentials' }).getByRole('button', { name: 'Replay tour' }).click();
+  await expect(page.getByRole('dialog', { name: 'Setup & credentials' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Welcome to AI Trader' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Trade' })).toHaveAttribute('aria-current', 'page');
+
+  for (let i = 0; i < 6; i++) await page.getByRole('button', { name: 'Next' }).click();
+  const discover = page.getByRole('dialog', { name: 'Discover' });
+  await expect(discover).toBeVisible();
+  await expect(discover).not.toContainText('This panel appears');
+  await expect.poll(() => spotlightCovers(page, page.locator('[data-tour="discover"]'))).toBe(true);
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.tour-card')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'PAPER');
 });

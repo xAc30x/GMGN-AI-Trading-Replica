@@ -13,7 +13,7 @@
     "test": "node --test server/tests/*.test.js",
     "test:money": "node --test server/tests/moneyPath.test.js",
     "test:broadcast-safety": "node --test server/tests/broadcastSafety.test.js server/tests/broadcastLedger.test.js",
-    "test:browser": "playwright test"
+    "test:browser": "PW_DISABLE_TS_ESM=1 playwright test"
   },
   "dependencies": {
     "@solana/wallet-adapter-base": "^0.9.28",

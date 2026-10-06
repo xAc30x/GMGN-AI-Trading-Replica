@@ -4,7 +4,7 @@
  * path, so this process must never accept or use GMGN_PRIVATE_KEY.
  * Quotes still need GMGN_LIVE=1, X-GMGN-Token, spend cap, and CA denylist.
  */
-import { envNumber } from './config.js';
+import { envNumber, loadSecretsFile, secretsFilePath } from './config.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -77,8 +77,6 @@ const EXPLORER = {
   eth: (hash) => `https://etherscan.io/tx/${hash}`,
 };
 
-const BOX_SECRETS_PATH = '/home/box/sand-data/box-secrets.json';
-
 /** Demo/placeholder CAs from the UI mock table — never valid LIVE output tokens. */
 const BLOCKED_OUTPUT_TOKENS = new Set([
   '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
@@ -105,24 +103,6 @@ const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
 const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
 const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
 const TOKEN_HEADER = 'x-gmgn-token';
-
-/** Load GMGN_* from Grok Bot secret-request store (card) without logging values. */
-function loadBoxSecrets() {
-  try {
-    if (!fs.existsSync(BOX_SECRETS_PATH)) return;
-    const data = JSON.parse(fs.readFileSync(BOX_SECRETS_PATH, 'utf8'));
-    const card = data?.card || {};
-    // Never load GMGN_PRIVATE_KEY — this server does not sign LIVE swaps.
-    for (const key of ['GMGN_API_KEY', 'GMGN_WALLET_ADDRESS']) {
-      const v = card[key];
-      if (typeof v === 'string' && v.trim() && !process.env[key]) {
-        process.env[key] = v.trim();
-      }
-    }
-  } catch {
-    // ignore malformed store
-  }
-}
 
 function loadEnvFile() {
   if (fs.existsSync(ENV_PATH)) {
@@ -1177,7 +1157,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  loadBoxSecrets();
+  loadSecretsFile(secretsFilePath());
   loadEnvFile();
   stripPersistedPrivateKey();
   ensureLocalToken();

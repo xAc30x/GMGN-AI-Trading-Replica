@@ -30,7 +30,8 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 ## Run
 
 ```bash
-cd /home/gptanonymous/gmgn-ai-trader-release
+git clone https://github.com/xAc30x/GMGN-AI-Trading-Replica.git
+cd GMGN-AI-Trading-Replica
 npm install
 # Keep both actual-service execution gates disabled.
 unset GMGN_LIVE GMGN_SOL_BROADCAST
@@ -43,6 +44,17 @@ Open http://127.0.0.1:5173/
 2. Connect **Phantom** or **Solflare**
 3. Keep both execution gates unset. LIVE/PAPER service routes remain disabled in this setup.
    Automated tests use isolated loopback fixtures that never submit a real trade.
+
+Optional secrets file: the server reads `GMGN_API_KEY` and `GMGN_WALLET_ADDRESS` from
+`~/.config/gmgn-trader/secrets.json` if it exists (set `GMGN_SECRETS_PATH` to use another location).
+The file lives outside the repository, so it is never committed. Format:
+
+```json
+{ "card": { "GMGN_API_KEY": "...", "GMGN_WALLET_ADDRESS": "..." } }
+```
+
+Restrict it to your user with `chmod 600 ~/.config/gmgn-trader/secrets.json`. Values already set in the
+environment or `server/.env` win over the file. `GMGN_PRIVATE_KEY` is never read from it.
 
 Optional: set `VITE_SOLANA_RPC_URL` to a dedicated RPC (Helius / QuickNode). Public mainnet RPC is fine for smoke tests, flaky for production.
 

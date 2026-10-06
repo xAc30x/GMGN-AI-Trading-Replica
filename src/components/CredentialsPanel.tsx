@@ -12,6 +12,9 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onReadyChange?: (ready: boolean, health: HealthResponse | null) => void;
+  /** Experimental live position chart; the same setting as the chart panel's own switch. */
+  liveChartOn: boolean;
+  onLiveChartChange: (next: boolean) => void;
 }
 
 const GLYPH: Record<StepStatus, string> = { pass: '✓', warn: '!', fail: '✕', info: '' };
@@ -25,7 +28,7 @@ function sourceLabel(source?: string, present?: boolean): string {
 }
 
 /** Settings as a setup checklist: what is ready, what blocks each mode, and which values the server owns. */
-export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
+export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, onLiveChartChange }: Props) {
   const wallet = useWallet();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
@@ -221,6 +224,28 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
                     </p>
                     <MintTest />
                   </>
+                )}
+                {sec.id === 'experimental' && (
+                  <div className="setup-experimental">
+                    <p className="setup-note">Off by default. These may change or break.</p>
+                    <label className="experimental-row">
+                      <span className="experimental-text">
+                        <b>Live position chart (DexScreener)</b>
+                        <span>
+                          Shows a DexScreener chart for each Solana coin you hold, under Open positions. Display only: it
+                          can't place orders, and DexScreener sees which coin you view. Positions and safety checks never
+                          depend on it.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        checked={liveChartOn}
+                        onChange={(e) => onLiveChartChange(e.target.checked)}
+                        aria-label="Live position chart"
+                      />
+                    </label>
+                  </div>
                 )}
                 {sec.steps.length > 0 && (
                   <ol className="setup-steps" aria-label={`${sec.label} steps`}>

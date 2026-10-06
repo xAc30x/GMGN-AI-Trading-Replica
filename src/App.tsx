@@ -14,6 +14,8 @@ import { LiveUnlockDialog } from './components/LiveUnlockDialog';
 import { livePreflight } from './livePreflight';
 import type { LiveSessionMinutes } from './livePreflight';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
+import { LivePositionChart } from './components/LivePositionChart';
+import { useLiveChartSetting } from './useLiveChartSetting';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
@@ -64,6 +66,7 @@ export default function App() {
   const [mode, setMode] = useState<TradeMode>('SHADOW');
   const [clock, setClock] = useState(utcClock);
   const [buyAmount, setBuyAmount] = useState(0.01);
+  const [liveChartOn, setLiveChartOn] = useLiveChartSetting();
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
   const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
@@ -465,6 +468,7 @@ export default function App() {
                 onSelect={setInspect}
               />
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
               {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
               <DecisionLog logs={modeLogs} />
             </div>
@@ -530,6 +534,7 @@ export default function App() {
             </div>
             <div className="col-side">
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}
@@ -567,6 +572,8 @@ export default function App() {
       <CredentialsPanel
         open={credOpen}
         onClose={() => setCredOpen(false)}
+        liveChartOn={liveChartOn}
+        onLiveChartChange={setLiveChartOn}
         onReadyChange={() => {
           void fetchHealth().then(setHealth).catch(() => setHealth(null));
         }}

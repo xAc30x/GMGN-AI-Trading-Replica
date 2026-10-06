@@ -130,6 +130,8 @@ const SECTIONS: Omit<SettingsSection, 'status'>[] = [
   { id: 'safety', label: 'Safety gates', steps: [] },
   { id: 'limits', label: 'Trade limits', steps: [5] },
   { id: 'execution', label: 'Execution gates', steps: [4] },
+  // Optional display features, off by default; no setup status.
+  { id: 'experimental', label: 'Experimental', steps: [] },
 ];
 
 const RANK: Record<StepStatus, number> = { info: 0, pass: 1, warn: 2, fail: 3 };

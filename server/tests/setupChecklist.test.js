@@ -59,6 +59,7 @@ test('settings sections cover every setup step once and show the worst status of
     ['Safety gates', 'info'],
     ['Trade limits', 'info'],
     ['Execution gates', 'pass'],
+    ['Experimental', 'info'],
   ]);
   assert.deepEqual(sections.flatMap(s => s.steps).sort(), [1, 2, 3, 4, 5]);
   // A missing wallet fails the access section even though the token is fine.
@@ -70,5 +71,5 @@ test('settings sections cover every setup step once and show the worst status of
   assert.equal(warn[4].status, 'warn');
   // With the server unreachable, the network and gate sections fail.
   const down = settingsSections(setupSteps({ ...ready, health: null }));
-  assert.deepEqual(down.map(s => s.status), ['pass', 'fail', 'info', 'info', 'fail']);
+  assert.deepEqual(down.map(s => s.status), ['pass', 'fail', 'info', 'info', 'fail', 'info']);
 });

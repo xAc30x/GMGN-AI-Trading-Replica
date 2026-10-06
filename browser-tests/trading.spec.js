@@ -663,3 +663,29 @@ test('status bar shows the latest real activity, the server limits and that the 
   await dialog.getByRole('button', { name: 'Open paper position' }).click();
   await expect(bar).toContainText('PAPER position opened: FOUND · 0.01 SOL');
 });
+
+test('settings is a setup checklist that shows what blocks each mode', async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const setup = page.getByRole('dialog', { name: 'Setup & credentials' });
+  const modes = setup.getByRole('list', { name: 'Mode readiness' });
+  await expect(modes.getByRole('listitem').filter({ hasText: 'SHADOW' })).toContainText('Ready');
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
+  await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 1');
+  const steps = setup.getByRole('list', { name: 'Setup steps' });
+  await expect(steps).toContainText('GMGN_SOL_BROADCAST');
+  await expect(steps).toContainText('server signingdisabled ✓');
+  await expect(steps).toContainText('per trade0.05 SOL');
+
+  await setup.getByLabel('Local access token').fill('browser-fixture-token');
+  await setup.getByRole('button', { name: 'Save token' }).click();
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Ready');
+  // No wallet is connected in this test, so LIVE is now blocked by the wallet step.
+  await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 2');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), 'browser-fixture-token');
+
+  await setup.getByRole('button', { name: 'Forget' }).click();
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), null);
+});

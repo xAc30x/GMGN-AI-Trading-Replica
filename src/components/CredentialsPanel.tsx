@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import type { HealthResponse } from '../api';
 import { fetchHealth, saveCredentials } from '../api';
 import { getLocalToken, setLocalToken } from '../localToken';
+import { limitRows, modeReadiness, setupSteps, type StepStatus } from '../setupChecklist';
+import { isPublicSolanaRpc } from '../solana/constants';
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onReadyChange?: (ready: boolean, health: HealthResponse | null) => void;
 }
+
+const GLYPH: Record<StepStatus, string> = { pass: '✓', warn: '!', fail: '✕', info: '' };
 
 function sourceLabel(source?: string, present?: boolean): string {
   if (source === 'disabled') return 'disabled (no server signing)';
@@ -17,11 +22,16 @@ function sourceLabel(source?: string, present?: boolean): string {
   return 'configured';
 }
 
+/** Settings as a setup checklist: what is ready, what blocks each mode, and which values the server owns. */
 export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
+  const wallet = useWallet();
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [wallet, setWallet] = useState('');
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const [walletAddr, setWalletAddr] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [localToken, setLocalTokenField] = useState(() => getLocalToken());
+  const [tokenPresent, setTokenPresent] = useState(() => Boolean(getLocalToken()));
+  const [replacing, setReplacing] = useState(false);
+  const [tokenField, setTokenField] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -30,11 +40,14 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
     try {
       const h = await fetchHealth();
       setHealth(h);
-      onReadyChange?.(h.liveReady, h);
       setErr(null);
+      onReadyChange?.(h.liveReady, h);
     } catch (e) {
+      setHealth(null);
       setErr(e instanceof Error ? e.message : 'Health check failed — is the server running?');
       onReadyChange?.(false, null);
+    } finally {
+      setCheckedAt(new Date().toLocaleTimeString());
     }
   };
 
@@ -45,26 +58,54 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
   if (!open) return null;
 
   const c = health?.credentials;
+  const rpcIsPublic = Boolean(health?.rpcIsPublic) || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '');
+  const steps = setupSteps({
+    health,
+    tokenPresent,
+    walletAddress: wallet.publicKey?.toBase58() ?? null,
+    walletName: wallet.wallet?.adapter.name ?? null,
+    rpcIsPublic,
+  });
+  const readiness = modeReadiness(steps);
+  const limits = limitRows(health);
+  const showTokenInput = !tokenPresent || replacing;
 
-  const onSave = async () => {
+  const saveToken = async () => {
+    const t = tokenField.trim();
+    if (!t) {
+      setErr('Paste GMGN_LOCAL_TOKEN from server/.env first (generated on server start).');
+      return;
+    }
+    setLocalToken(t);
+    setTokenField('');
+    setTokenPresent(true);
+    setReplacing(false);
+    setMsg('Access token stored in this browser session.');
+    await refresh();
+  };
+
+  const forgetToken = async () => {
+    setLocalToken('');
+    setTokenPresent(false);
+    setReplacing(false);
+    setMsg('Access token removed from this browser session.');
+    await refresh();
+  };
+
+  const saveLegacy = async () => {
     setBusy(true);
     setMsg(null);
     setErr(null);
     try {
-      if (localToken.trim()) {
-        setLocalToken(localToken.trim());
-      }
       if (!getLocalToken()) {
-        setErr('Paste GMGN_LOCAL_TOKEN from server/.env first (generated on server start).');
-        setBusy(false);
+        setErr('Save the access token first (step 1).');
         return;
       }
       const body: { walletAddress?: string; apiKey?: string } = {};
-      if (wallet.trim()) body.walletAddress = wallet.trim();
+      if (walletAddr.trim()) body.walletAddress = walletAddr.trim();
       if (apiKey.trim() && c?.apiKeySource === 'missing') body.apiKey = apiKey.trim();
       if (!body.walletAddress && !body.apiKey) {
-        setMsg('Local API token stored in this browser session. Wallet/API key unchanged.');
-        await refresh();
+        setMsg('Nothing to save: wallet address and API key are unchanged.');
         return;
       }
       await saveCredentials(body);
@@ -78,6 +119,14 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
     }
   };
 
+  const gates: [string, string, boolean][] = health
+    ? [
+        ['GMGN_LIVE', health.solLiveEnabled ? '1 · market data on' : 'off · PAPER and LIVE blocked', Boolean(health.solLiveEnabled)],
+        ['GMGN_SOL_BROADCAST', health.solBroadcastEnabled ? '1 · LIVE sends allowed' : 'unset · no sends', Boolean(health.solBroadcastEnabled)],
+        ['server signing', health.serverSigningDisabled === true ? 'disabled ✓' : 'not confirmed disabled', health.serverSigningDisabled === true],
+      ]
+    : [];
+
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
       <div
@@ -88,133 +137,174 @@ export function CredentialsPanel({ open, onClose, onReadyChange }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <span style={{ color: 'var(--lime)' }}>🔑</span>
-          <h3 id="cred-title">Access token</h3>
+          <h3 id="cred-title">Setup &amp; credentials</h3>
+          <span className="setup-checked">{checkedAt ? `status checked ${checkedAt}` : 'checking status…'}</span>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
-        <p className="cred-disclaimer">
-          <strong>For SOL PAPER/LIVE you only need the local access token.</strong> Run{' '}
-          <code>grep GMGN_LOCAL_TOKEN server/.env</code>, paste the value below, and click Save. Trades are
-          signed in your connected wallet (Phantom/Solflare); this server never holds a private key. Each buy
-          is capped at <code>GMGN_MAX_NATIVE_AMOUNT</code>.
-        </p>
-        <p className="help" style={{ marginBottom: 12 }}>
-          Wallet address and GMGN API key are optional and only used by the legacy GMGN quote path (non-SOL
-          chains). Leave them empty for SOL trading.
-        </p>
+        <ul className="setup-modes" aria-label="Mode readiness">
+          {readiness.map((r) => (
+            <li key={r.mode} className={r.ready ? 'is-ready' : 'is-blocked'}>
+              <span className="setup-mode-name">{r.mode}</span>
+              <span>{r.ready ? '✓ Ready' : `✕ Blocked by step ${r.blockedBy}`}</span>
+            </li>
+          ))}
+        </ul>
 
-        <div className="cred-status">
-          <div>
-            CLI:{' '}
-            <strong className={health?.cliInstalled ? 'pos' : 'neg'}>
-              {health?.cliInstalled ? 'installed' : 'not found'}
-            </strong>
-          </div>
-          <div>
-            API key:{' '}
-            <strong className={c?.apiKey ? 'pos' : 'neg'}>
-              {sourceLabel(c?.apiKeySource, c?.apiKey)}
-            </strong>
-          </div>
-          <div>
-            Private key:{' '}
-            <strong className="neg">{sourceLabel(c?.privateKeySource, false)}</strong>
-          </div>
-          <div>
-            Wallet:{' '}
-            <strong className={c?.wallet ? 'pos' : 'neg'}>
-              {c?.wallet ? c.walletAddressMasked || 'set' : 'missing'}
-            </strong>
-          </div>
-          <div>
-            GMGN quotes (optional):{' '}
-            <strong className={health?.liveReady ? 'pos' : 'neg'}>
-              {health?.liveReady ? 'yes' : 'no'}
-            </strong>
-          </div>
-          <div>
-            server signing:{' '}
-            <strong className="neg">
-              {health?.serverSigningDisabled !== false ? 'disabled' : 'enabled'}
-            </strong>
-          </div>
-          <div>
-            GMGN_LIVE:{' '}
-            <strong className={health?.liveEnabled ? 'pos' : 'neg'}>
-              {health?.liveEnabled ? '1' : 'off'}
-            </strong>
-          </div>
-          <div>
-            max native: <strong>{health?.maxNativeAmount ?? '—'}</strong>
-          </div>
-          <div>
-            browser token:{' '}
-            <strong className={getLocalToken() ? 'pos' : 'neg'}>
-              {getLocalToken() ? 'in session' : 'missing'}
-            </strong>
-          </div>
-        </div>
+        <ol className="setup-steps" aria-label="Setup steps">
+          {steps.map((s) => (
+            <li key={s.n} className={`setup-step step-${s.status}`}>
+              <span className="setup-badge" aria-label={s.status === 'info' ? `step ${s.n}` : s.status}>
+                {GLYPH[s.status] || s.n}
+              </span>
+              <div className="setup-body">
+                <div className="setup-title">
+                  <b>{s.title}</b>
+                  <span className="setup-role">{s.role}</span>
+                  <span className="setup-detail">{s.detail}</span>
+                </div>
 
-        <div className="field">
-          <label htmlFor="cred-token">Local API token (GMGN_LOCAL_TOKEN from server/.env)</label>
-          <input
-            id="cred-token"
-            type="password"
-            value={localToken}
-            onChange={(e) => setLocalTokenField(e.target.value)}
-            placeholder="Required for PAPER and LIVE"
-            autoComplete="off"
-          />
-        </div>
+                {s.n === 1 && (
+                  <>
+                    {showTokenInput ? (
+                      <div className="setup-token">
+                        <input
+                          type="password"
+                          value={tokenField}
+                          onChange={(e) => setTokenField(e.target.value)}
+                          placeholder="Paste GMGN_LOCAL_TOKEN"
+                          autoComplete="off"
+                          aria-label="Local access token"
+                        />
+                        <button type="button" className="btn-primary btn-small" onClick={() => void saveToken()}>
+                          Save token
+                        </button>
+                        {replacing && (
+                          <button type="button" className="btn-ghost btn-small" onClick={() => { setReplacing(false); setTokenField(''); }}>
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="setup-actions">
+                        <button type="button" className="btn-ghost btn-small" onClick={() => setReplacing(true)}>
+                          Replace
+                        </button>
+                        <button type="button" className="btn-ghost btn-small" onClick={() => void forgetToken()}>
+                          Forget
+                        </button>
+                      </div>
+                    )}
+                    <code className="setup-cmd">grep GMGN_LOCAL_TOKEN server/.env</code>
+                  </>
+                )}
 
-        <div className="field">
-          <label htmlFor="cred-wallet">Wallet address (optional, legacy GMGN quotes only)</label>
-          <input
-            id="cred-wallet"
-            value={wallet}
-            onChange={(e) => setWallet(e.target.value)}
-            placeholder={c?.walletAddressMasked || 'Solana / EVM address'}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </div>
+                {s.n === 2 && (
+                  <p className="setup-note">
+                    {s.status === 'pass'
+                      ? 'This app never holds a private key. Use a throwaway wallet with a small balance.'
+                      : 'Connect Phantom or Solflare with the wallet button in the header. This app never holds a private key.'}
+                  </p>
+                )}
 
-        {c?.apiKeySource === 'missing' && (
+                {s.n === 3 && s.status === 'warn' && (
+                  <p className="setup-note">
+                    Works for smoke tests, unreliable for trading. Set the same dedicated URL for server and browser:{' '}
+                    <code>SOLANA_RPC_URL</code> · <code>VITE_SOLANA_RPC_URL</code>
+                  </p>
+                )}
+
+                {s.n === 4 && gates.length > 0 && (
+                  <>
+                    <dl className="setup-kv">
+                      {gates.map(([k, v, ok]) => (
+                        <div key={k}>
+                          <dt>{k}</dt>
+                          <dd className={ok ? 'pos' : 'warn'}>{v}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <p className="setup-note">
+                      Broadcast is a separate, default-off opt-in. Keeping it off is the safe default; PAPER doesn't need it.
+                    </p>
+                  </>
+                )}
+
+                {s.n === 5 && limits.length > 0 && (
+                  <dl className="setup-kv setup-limits">
+                    {limits.map(([k, v]) => (
+                      <div key={k}>
+                        <dt>{k}</dt>
+                        <dd>{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        <details className="setup-legacy">
+          <summary>Legacy GMGN quote path (non-SOL chains): wallet address, API key. Optional.</summary>
+          <div className="cred-status">
+            <div>
+              CLI: <strong className={health?.cliInstalled ? 'pos' : 'neg'}>{health?.cliInstalled ? 'installed' : 'not found'}</strong>
+            </div>
+            <div>
+              API key: <strong className={c?.apiKey ? 'pos' : 'neg'}>{sourceLabel(c?.apiKeySource, c?.apiKey)}</strong>
+            </div>
+            <div>
+              Wallet: <strong className={c?.wallet ? 'pos' : 'neg'}>{c?.wallet ? c.walletAddressMasked || 'set' : 'missing'}</strong>
+            </div>
+            <div>
+              GMGN quotes: <strong className={health?.liveReady ? 'pos' : 'neg'}>{health?.liveReady ? 'yes' : 'no'}</strong>
+            </div>
+          </div>
           <div className="field">
-            <label htmlFor="cred-api">GMGN API key (optional, legacy quotes only)</label>
+            <label htmlFor="cred-wallet">Wallet address (legacy GMGN quotes only)</label>
             <input
-              id="cred-api"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Paste only if not already in env"
+              id="cred-wallet"
+              value={walletAddr}
+              onChange={(e) => setWalletAddr(e.target.value)}
+              placeholder={c?.walletAddressMasked || 'Solana / EVM address'}
               autoComplete="off"
+              spellCheck={false}
             />
           </div>
-        )}
-
-        {c?.apiKey && (
-          <div className="help" style={{ marginBottom: 12 }}>
-            API key is already configured via env/file — no need to paste it into the web UI.
-          </div>
-        )}
+          {c?.apiKeySource === 'missing' ? (
+            <div className="field">
+              <label htmlFor="cred-api">GMGN API key (legacy quotes only)</label>
+              <input
+                id="cred-api"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Paste only if not already in env"
+                autoComplete="off"
+              />
+            </div>
+          ) : c?.apiKey ? (
+            <p className="setup-note">API key is already configured via env or file. No need to paste it here.</p>
+          ) : null}
+          <button type="button" className="btn-ghost btn-small" disabled={busy} onClick={() => void saveLegacy()}>
+            {busy ? 'Saving…' : 'Save legacy settings'}
+          </button>
+        </details>
 
         {msg && <div className="cred-msg ok">{msg}</div>}
         {err && <div className="cred-msg err">{err}</div>}
 
         <div className="modal-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={() => void onSave()}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
           <button type="button" className="btn-ghost" onClick={() => void refresh()}>
-            Refresh status
+            Re-check status
           </button>
           <button type="button" className="btn-ghost" onClick={onClose}>
             Close
           </button>
+          <span className="setup-foot">Private keys are rejected by this server.</span>
         </div>
       </div>
     </div>

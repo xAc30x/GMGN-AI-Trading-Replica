@@ -429,3 +429,47 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
 });
+
+test('live chart starts off, shows a sandboxed DexScreener frame for a held coin, and remembers the switch', async ({ page }) => {
+  const chartRequests = [];
+  await page.route('https://dexscreener.com/**', route => {
+    chartRequests.push(route.request().url());
+    return route.fulfill({ contentType: 'text/html', body: '<p>chart fixture</p>' });
+  });
+  await installApiFixtures(page);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 5_000 });
+
+  const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Live chart' }) });
+  const toggle = panel.getByRole('switch', { name: 'Show chart' });
+  await expect(toggle).not.toBeChecked();
+  await expect(panel.locator('iframe')).toHaveCount(0);
+  assert.equal(chartRequests.length, 0);
+
+  await toggle.check();
+  await expect(panel.getByRole('tab', { name: 'TEST' })).toHaveAttribute('aria-selected', 'true');
+  const frame = panel.locator('iframe');
+  await expect(frame).toHaveAttribute('src', `https://dexscreener.com/solana/${mintText}?embed=1&theme=dark&trades=0&info=0`);
+  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups');
+  await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
+  await expect.poll(() => chartRequests.length).toBeGreaterThan(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.liveChart.enabled.v1')), 'true');
+
+  await toggle.uncheck();
+  await expect(panel.locator('iframe')).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.liveChart.enabled.v1')), 'false');
+});
+
+test('live chart switch stays on after a reload and charts nothing for demo rows', async ({ page }) => {
+  await page.goto('/');
+  const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Live chart' }) });
+  const toggle = panel.getByRole('switch', { name: 'Show chart' });
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(panel.getByText('No held Solana coins to chart.')).toBeVisible();
+  await page.reload();
+  await expect(panel.getByRole('switch', { name: 'Show chart' })).toBeChecked();
+  await expect(panel.locator('iframe')).toHaveCount(0);
+});

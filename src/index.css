@@ -1620,3 +1620,32 @@ table.screen tr:hover td {
 .research-decisions { padding-left: 20px; font-size: 12px; line-height: 1.7; }
 .research-decisions li { margin-bottom: 8px; }
 .automation-panel table.screen { min-width: 800px; }
+
+/* Live position chart */
+.live-chart-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.live-chart-note {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.live-chart-tabs {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.live-chart-frame {
+  display: block;
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-card);
+}

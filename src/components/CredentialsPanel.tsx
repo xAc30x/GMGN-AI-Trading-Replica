@@ -15,6 +15,8 @@ interface Props {
   /** Experimental live position chart; the same setting as the chart panel's own switch. */
   liveChartOn: boolean;
   onLiveChartChange: (next: boolean) => void;
+  /** Closes Settings and starts the first-launch tour again. */
+  onReplayTour: () => void;
 }
 
 const GLYPH: Record<StepStatus, string> = { pass: '✓', warn: '!', fail: '✕', info: '' };
@@ -28,7 +30,7 @@ function sourceLabel(source?: string, present?: boolean): string {
 }
 
 /** Settings as a setup checklist: what is ready, what blocks each mode, and which values the server owns. */
-export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, onLiveChartChange }: Props) {
+export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, onLiveChartChange, onReplayTour }: Props) {
   const wallet = useWallet();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
@@ -152,6 +154,9 @@ export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, on
         <div className="modal-head">
           <h3 id="cred-title">Setup &amp; credentials</h3>
           <span className="setup-checked">{checkedAt ? `status checked ${checkedAt}` : 'checking status…'}</span>
+          <button type="button" className="btn-ghost btn-small" onClick={onReplayTour}>
+            Replay tour
+          </button>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
             ×
           </button>

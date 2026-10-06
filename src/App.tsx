@@ -585,6 +585,11 @@ export default function App() {
         onClose={() => setCredOpen(false)}
         liveChartOn={liveChartOn}
         onLiveChartChange={setLiveChartOn}
+        onReplayTour={() => {
+          setCredOpen(false);
+          setTab('token');
+          setTourOpen(true);
+        }}
         onReadyChange={() => {
           void fetchHealth().then(setHealth).catch(() => setHealth(null));
         }}

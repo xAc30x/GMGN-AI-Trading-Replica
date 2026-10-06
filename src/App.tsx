@@ -7,12 +7,21 @@ import { DecisionLog } from './components/DecisionLog';
 import { DemoBanner } from './components/DemoBanner';
 import { GateFunnel } from './components/GateFunnel';
 import { Header } from './components/Header';
+import type { RpcKind } from './components/Header';
 import { MetricCards } from './components/MetricCards';
+import { ModeBanner } from './components/ModeBanner';
+import { LiveUnlockDialog } from './components/LiveUnlockDialog';
+import { livePreflight } from './livePreflight';
+import type { LiveSessionMinutes } from './livePreflight';
 import { PositionEscapeMonitor } from './components/PositionEscapeMonitor';
 import { LivePositionChart } from './components/LivePositionChart';
+import { useLiveChartSetting } from './useLiveChartSetting';
 import { ScreeningTable } from './components/ScreeningTable';
 import { LiveWatchlistTable } from './components/LiveWatchlistTable';
 import { DiscoveryFeed } from './components/DiscoveryFeed';
+import { TokenInspector } from './components/TokenInspector';
+import { StatusBar } from './components/StatusBar';
+import type { InspectTarget } from './safetyChecks';
 import { ResearchPanel } from './components/ResearchPanel';
 import { ResearchAutomationPanel } from './components/ResearchAutomationPanel';
 import { useLivePnl } from './useLivePnl';
@@ -21,10 +30,12 @@ import { SettingsModal } from './components/SettingsModal';
 import { WalletEval } from './components/WalletEval';
 import {
   loadLivePositions,
+  loadTradeAttempts,
   reconcileWalletTrades,
   LIVE_POSITIONS_STORAGE_KEY,
 } from './positions';
 import { fetchHealth } from './api';
+import type { HealthResponse } from './api';
 import { signAndSendSolClose } from './solana/sendJupiterSwap';
 import { isPublicSolanaRpc, makeConnection } from './solana/constants';
 import { hasLocalToken } from './localToken';
@@ -54,15 +65,19 @@ export default function App() {
   const [chain, setChain] = useState<Chain>('SOL');
   const [mode, setMode] = useState<TradeMode>('SHADOW');
   const [clock, setClock] = useState(utcClock);
-  const [latency, setLatency] = useState(233);
   const [buyAmount, setBuyAmount] = useState(0.01);
+  const [liveChartOn, setLiveChartOn] = useLiveChartSetting();
   const [tokens] = useState<ScreenToken[]>(INITIAL_TOKENS);
   const [positions, setPositions] = useState<Position[]>(() => [...INITIAL_POSITIONS, ...loadLivePositions()]);
   const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
   const [buyToken, setBuyToken] = useState<ScreenToken | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [credOpen, setCredOpen] = useState(false);
-  const [liveReady, setLiveReady] = useState(false);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  /** Epoch ms when the current LIVE session auto-locks; null outside LIVE. */
+  const [liveUntil, setLiveUntil] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [command, setCommand] = useState(DEFAULT_TRENDING_CMD);
   const [pollInterval, setPollInterval] = useState(5.6);
   const [scanning, setScanning] = useState(false);
@@ -93,17 +108,15 @@ export default function App() {
   useEffect(() => {
     const id = window.setInterval(() => {
       setClock(utcClock());
-      setLatency(140 + Math.floor(Math.random() * 120));
+      setNowMs(Date.now());
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
     void fetchHealth()
-      .then((h) => {
-        setLiveReady(h.liveReady);
-      })
-      .catch(() => setLiveReady(false));
+      .then(setHealth)
+      .catch(() => setHealth(null));
   }, []);
 
   useEffect(() => {
@@ -127,10 +140,15 @@ export default function App() {
     };
   }, [reconcileTrades]);
 
+  const rpcKind: RpcKind = health === null
+    ? 'unknown'
+    : health.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '') ? 'public' : 'dedicated';
+
   const visiblePositions = positions.filter(p => mode === 'SHADOW'
     ? p.demo
     : !p.demo && p.walletAddress === wallet.publicKey?.toBase58());
   const [watchVersion, setWatchVersion] = useState(0);
+  const [inspect, setInspect] = useState<InspectTarget | null>(null);
   const { pnl: livePnl, refreshing: pnlRefreshing } = useLivePnl(visiblePositions, wallet.publicKey, mode !== 'SHADOW' && chain === 'SOL');
   const trackedPositions = visiblePositions.filter(p => (livePnl[p.id]?.zeroStreak ?? 0) < 2);
   const awaiting = tokens.filter((t) => t.decision === 'buy').length;
@@ -138,6 +156,8 @@ export default function App() {
     () => visiblePositions.reduce((s, p) => s + p.sizeSol, 0),
     [visiblePositions],
   );
+  // SHADOW shows every log line (mock data); PAPER and LIVE only show real trading activity.
+  const modeLogs = mode === 'SHADOW' ? logs : logs.filter((l) => l.category === 'live' || l.category === 'paper');
   const escapeAlerts = visiblePositions.filter((p) => p.demo && (p.alert || p.pnlPct < -10)).length;
 
   const appendLog = useCallback((kind: LogEntry['kind'], category: string, message: string) => {
@@ -153,63 +173,88 @@ export default function App() {
     ]);
   }, []);
 
-  const handleMode = async (m: TradeMode) => {
-    if (m === 'LIVE' || m === 'PAPER') {
-      if (!hasLocalToken()) {
-        showToast('Paste GMGN_LOCAL_TOKEN from server/.env in Credentials');
-        setCredOpen(true);
-        return;
-      }
-      try {
-        const h = await fetchHealth();
-        setLiveReady(h.liveReady);
-        const solLive = Boolean(h.solLiveEnabled ?? h.liveEnabled);
-        if (!solLive) {
-          showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
-          return;
-        }
-        if (m === 'LIVE' && chain === 'SOL' && !h.solBroadcastEnabled) {
-          showToast('SOL transaction broadcast is disabled — PAPER remains available without it');
-          return;
-        }
-        if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
-          showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
-        }
-      } catch {
-        showToast('Server not reachable — start npm run server');
-        return;
-      }
-      if (m === 'LIVE' && chain === 'SOL' && !wallet.connected) {
-        showToast('Connect Phantom or Solflare first (needed as fee-payer pubkey)');
-        return;
-      }
-      if (m === 'LIVE') {
-        const ok = window.confirm(
-          chain === 'SOL'
-            ? 'SOL LIVE spends real funds after wallet approve. Prefer PAPER first. Continue?'
-            : 'LIVE on this chain is quote/intent only. Continue?',
-        );
-        if (!ok) return;
-      } else {
-        const ok = window.confirm(
-          chain === 'SOL'
-            ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
-            : 'PAPER on this chain creates quote/copy intents only. Continue?',
-        );
-        if (!ok) return;
-      }
-    }
+  /** Every mode change goes through here so a LIVE session timer never outlives LIVE. */
+  const applyMode = useCallback((m: TradeMode, liveMinutes?: LiveSessionMinutes) => {
     setMode(m);
+    setLiveUntil(m === 'LIVE' && liveMinutes ? Date.now() + liveMinutes * 60_000 : null);
     const msg =
       m === 'LIVE'
         ? chain === 'SOL'
-          ? 'Mode LIVE — wallet-signed SOL Jupiter.'
-          : 'Mode LIVE — quote/intent only on this chain.'
+          ? `Mode LIVE — wallet-signed SOL Jupiter · auto-locks in ${liveMinutes} min.`
+          : `Mode LIVE — quote/intent only on this chain · auto-locks in ${liveMinutes} min.`
         : m === 'PAPER'
           ? 'Mode PAPER — simulate only (no send). Discovery and watchlist use live screening.'
           : 'Mode SHADOW (mock UI only).';
     appendLog('SCREEN', 'mode', msg);
+  }, [chain, appendLog]);
+
+  const lockLive = useCallback((reason: string) => {
+    applyMode('PAPER');
+    appendLog('SCREEN', 'mode', reason);
+    showToast(reason);
+  }, [applyMode, appendLog, showToast]);
+
+  useEffect(() => {
+    if (mode !== 'LIVE' || liveUntil === null) return;
+    const id = window.setTimeout(
+      () => lockLive('LIVE session ended — switched back to PAPER'),
+      Math.max(0, liveUntil - Date.now()),
+    );
+    return () => window.clearTimeout(id);
+  }, [mode, liveUntil, lockLive]);
+
+  const handleMode = async (m: TradeMode) => {
+    if (m === 'LIVE' || m === 'PAPER') {
+      if (!hasLocalToken()) {
+        showToast('Paste GMGN_LOCAL_TOKEN from server/.env in Settings');
+        setCredOpen(true);
+        return;
+      }
+      let h: HealthResponse;
+      try {
+        h = await fetchHealth();
+        setHealth(h);
+      } catch {
+        setHealth(null);
+        showToast('Server not reachable — start npm run server');
+        return;
+      }
+      if (m === 'LIVE') {
+        // The unlock dialog shows every LIVE precondition and blocks on any failure.
+        setUnlockOpen(true);
+        return;
+      }
+      if (!(h.solLiveEnabled ?? h.liveEnabled)) {
+        showToast('Server LIVE flag off — export GMGN_LIVE=1 then restart npm run server');
+        return;
+      }
+      if (h.rpcIsPublic || isPublicSolanaRpc(import.meta.env.VITE_SOLANA_RPC_URL || '')) {
+        showToast('Using public Solana RPC (via local proxy) — set SOLANA_RPC_URL for reliability');
+      }
+      const ok = window.confirm(
+        chain === 'SOL'
+          ? 'PAPER mode: track virtual positions with fresh quotes, modeled costs and automatic simulated exits. Nothing is signed or sent. Continue?'
+          : 'PAPER on this chain creates quote/copy intents only. Continue?',
+      );
+      if (!ok) return;
+    }
+    applyMode(m);
   };
+
+  const preflight = useMemo(
+    () => (unlockOpen ? livePreflight({
+      chain,
+      health,
+      tokenPresent: hasLocalToken(),
+      walletAddress: wallet.publicKey?.toBase58() ?? null,
+      walletName: wallet.wallet?.adapter.name ?? null,
+      rpcIsPublic: rpcKind === 'public',
+      unresolvedSignatures: loadTradeAttempts().filter(attempt =>
+        attempt.walletAddress === wallet.publicKey?.toBase58() &&
+        (attempt.status === 'submitted' || attempt.status === 'unknown')).length,
+    }) : []),
+    [unlockOpen, chain, health, wallet.publicKey, wallet.wallet, rpcKind],
+  );
 
   const handleBuyConfirm = (token: ScreenToken, amount: number, meta?: LiveBuyMeta) => {
     if (!meta?.live) {
@@ -303,7 +348,7 @@ export default function App() {
         return;
       }
       if (!hasLocalToken()) {
-        showToast('Paste GMGN_LOCAL_TOKEN in Credentials first');
+        showToast('Paste GMGN_LOCAL_TOKEN in Settings first');
         setCredOpen(true);
         return;
       }
@@ -355,23 +400,102 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-mode={mode}>
+      <ModeBanner
+        mode={mode}
+        chain={chain}
+        liveRemainingMs={liveUntil === null ? null : Math.max(0, liveUntil - nowMs)}
+        onLock={() => lockLive('LIVE locked — switched back to PAPER')}
+      />
       <DemoBanner />
       <Header
         tab={tab}
         onTab={setTab}
         chain={chain}
-        onChain={(next) => { setChain(next); setMode('SHADOW'); setBuyToken(null); }}
+        onChain={(next) => { setChain(next); applyMode('SHADOW'); setBuyToken(null); setInspect(null); }}
         mode={mode}
         onMode={(m) => void handleMode(m)}
         clock={clock}
-        latency={latency}
-        liveReady={liveReady}
-        onOpenCredentials={() => setCredOpen(true)}
+        rpc={rpcKind}
+        onOpenSettings={() => setCredOpen(true)}
       />
 
       <main className="main">
-        {tab === 'token' ? (
+        {tab === 'wallet' ? (
+          <WalletEval />
+        ) : tab === 'research' ? (
+          <div className="research-tab">
+            {mode !== 'SHADOW' && chain === 'SOL' ? (
+              <>
+                <ResearchAutomationPanel />
+                <ResearchPanel version={paperVersion} />
+              </>
+            ) : (
+              <section className="panel">
+                <p className="help">
+                  Background research runs on the server with real Solana data. Switch to PAPER on the SOL chain to view
+                  and control it (it needs the access token from Settings).
+                </p>
+              </section>
+            )}
+          </div>
+        ) : mode !== 'SHADOW' && chain === 'SOL' ? (
+          <div className="workspace">
+            <div className="ws-col ws-discover">
+              <DiscoveryFeed
+                buyAmount={buyAmount}
+                mode={mode}
+                onBuy={setBuyToken}
+                selectedMint={inspect?.mint ?? null}
+                onSelect={setInspect}
+                onWatch={(mint, symbol) => {
+                  try {
+                    addWatchMint(mint, symbol);
+                    setWatchVersion(v => v + 1);
+                    showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
+                  } catch { showToast('Watchlist storage unavailable'); }
+                }}
+              />
+            </div>
+            <div className="ws-col ws-center">
+              <LiveWatchlistTable
+                key={watchVersion}
+                buyAmount={buyAmount}
+                onBuyAmount={setBuyAmount}
+                onBuy={setBuyToken}
+                mode={mode}
+                selectedMint={inspect?.mint ?? null}
+                onSelect={setInspect}
+              />
+              <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
+              <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
+              {mode === 'PAPER' && <ResearchPanel version={paperVersion} />}
+              <DecisionLog logs={modeLogs} />
+            </div>
+            <TokenInspector
+              key={inspect?.mint ?? 'none'}
+              target={inspect}
+              onClose={() => setInspect(null)}
+              mode={mode}
+              health={health}
+              amount={buyAmount}
+              onAmount={setBuyAmount}
+              liveExposureSol={exposure}
+              liveOpenMints={visiblePositions.flatMap((p) => (p.address ? [p.address] : []))}
+              paperVersion={paperVersion}
+              onTrade={(t) => setBuyToken(t.buyToken)}
+              onLiveBought={(t, r) => handleBuyConfirm(t.buyToken, r.amountSol, {
+                hash: r.signature,
+                explorerUrl: r.explorerUrl,
+                tokenAddress: t.mint,
+                live: true,
+                walletSigned: true,
+                walletAddress: r.walletAddress,
+              })}
+              onReconcile={() => { void reconcileTrades(); }}
+            />
+          </div>
+        ) : (
           <div className="token-layout">
             <div className="col-main">
               {mode === 'SHADOW' && <MetricCards
@@ -398,35 +522,19 @@ export default function App() {
                   mode={mode}
                 />
               ) : (
-                <>
-                  {chain === 'SOL' && <ResearchAutomationPanel />}
-                  {chain === 'SOL' && <DiscoveryFeed
-                    buyAmount={buyAmount}
-                    mode={mode}
-                    onBuy={setBuyToken}
-                    onWatch={(mint, symbol) => {
-                      try {
-                        addWatchMint(mint, symbol);
-                        setWatchVersion(v => v + 1);
-                        showToast(`Added ${symbol || mint.slice(0, 6)} to watchlist`);
-                      } catch { showToast('Watchlist storage unavailable'); }
-                    }}
-                  />}
-                  <LiveWatchlistTable
-                    key={watchVersion}
-                    buyAmount={buyAmount}
-                    onBuyAmount={setBuyAmount}
-                    onBuy={setBuyToken}
-                    mode={mode}
-                  />
-                </>
+                <LiveWatchlistTable
+                  key={watchVersion}
+                  buyAmount={buyAmount}
+                  onBuyAmount={setBuyAmount}
+                  onBuy={setBuyToken}
+                  mode={mode}
+                />
               )}
-              {mode !== 'SHADOW' && chain === 'SOL' && <ResearchPanel version={paperVersion} />}
-              <DecisionLog logs={mode === 'SHADOW' ? logs : logs.filter(l => l.category === 'live' || l.category === 'paper')} />
+              <DecisionLog logs={modeLogs} />
             </div>
             <div className="col-side">
               <PositionEscapeMonitor positions={trackedPositions} livePnl={livePnl} refreshing={pnlRefreshing} onClose={(id) => void handleClosePosition(id)} />
-              <LivePositionChart positions={trackedPositions} />
+              <LivePositionChart positions={trackedPositions} enabled={liveChartOn} onEnabledChange={setLiveChartOn} />
               {mode === 'SHADOW' && <GateFunnel
                 scanned={tokens.length}
                 pending={awaiting}
@@ -436,10 +544,10 @@ export default function App() {
               />}
             </div>
           </div>
-        ) : (
-          <WalletEval />
         )}
       </main>
+
+      <StatusBar lastLog={modeLogs.length > 0 ? modeLogs[modeLogs.length - 1] : null} health={health} />
 
       <BuyModal
         key={String(buyToken?.id) + mode + chain}
@@ -451,10 +559,24 @@ export default function App() {
         onClose={() => setBuyToken(null)}
         onConfirm={handleBuyConfirm}
       />
+      <LiveUnlockDialog
+        open={unlockOpen}
+        currentMode={mode}
+        preflight={preflight}
+        onCancel={() => setUnlockOpen(false)}
+        onUnlock={(minutes) => {
+          setUnlockOpen(false);
+          applyMode('LIVE', minutes);
+        }}
+      />
       <CredentialsPanel
         open={credOpen}
         onClose={() => setCredOpen(false)}
-        onReadyChange={(ready) => setLiveReady(ready)}
+        liveChartOn={liveChartOn}
+        onLiveChartChange={setLiveChartOn}
+        onReadyChange={() => {
+          void fetchHealth().then(setHealth).catch(() => setHealth(null));
+        }}
       />
       <SettingsModal
         open={settingsOpen}

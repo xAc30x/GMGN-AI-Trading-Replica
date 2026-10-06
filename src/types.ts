@@ -1,6 +1,6 @@
 export type Chain = 'SOL' | 'BSC' | 'Base' | 'ETH';
 export type TradeMode = 'SHADOW' | 'PAPER' | 'LIVE';
-export type TabId = 'token' | 'wallet';
+export type TabId = 'token' | 'research' | 'wallet';
 export type LogKind = 'SCREEN' | 'FILTER' | 'BUY' | 'SELL';
 
 export interface ScreenToken {

@@ -29,6 +29,8 @@ export interface HealthResponse {
   defaultSlippageBps?: number;
   maxPriceImpactPct?: number;
   mintSafetyRequired?: boolean;
+  maxRugScore?: number;
+  minLiquidityUsd?: number;
   paperModeSupported?: boolean;
   rpcIsPublic?: boolean;
   solanaRpcConfigured?: boolean;
@@ -238,6 +240,8 @@ export interface MintSafetyCheck {
   id: string;
   ok: boolean;
   detail: string;
+  /** Severity from the rug scanners ('info' | 'warn' | 'danger' or a provider level). On-chain checks omit it. */
+  level?: string;
 }
 
 export interface MintSafetyResponse {

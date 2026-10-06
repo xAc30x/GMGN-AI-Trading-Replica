@@ -4,32 +4,11 @@ import type { Position } from '../types';
 /*
  * DexScreener chart for each held Solana coin, one tab per coin.
  * Off by default: nothing is requested from DexScreener until the switch is turned on.
- * Used in App.tsx under "Tracked holdings": <LivePositionChart positions={trackedPositions} />
+ * Used in App.tsx under the open positions. The on/off setting is shared with Settings → Experimental
+ * (see useLiveChartSetting).
  */
 
-const STORAGE_KEY = 'gmgn.liveChart.enabled.v1';
 const SOLANA_MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-
-/** Boolean setting kept in localStorage; falls back to `initial` when storage is unavailable. */
-function useStoredToggle(key: string, initial: boolean): [boolean, (next: boolean) => void] {
-  const [value, setValue] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw === null ? initial : raw === 'true';
-    } catch {
-      return initial;
-    }
-  });
-  const update = (next: boolean) => {
-    setValue(next);
-    try {
-      localStorage.setItem(key, String(next));
-    } catch {
-      // Storage blocked: the choice still applies until the page reloads.
-    }
-  };
-  return [value, update];
-}
 
 function chartUrl(mint: string): string {
   return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark&trades=0&info=0`;
@@ -37,10 +16,11 @@ function chartUrl(mint: string): string {
 
 interface Props {
   positions: Position[];
+  enabled: boolean;
+  onEnabledChange: (next: boolean) => void;
 }
 
-export function LivePositionChart({ positions }: Props) {
-  const [enabled, setEnabled] = useStoredToggle(STORAGE_KEY, false);
+export function LivePositionChart({ positions, enabled, onEnabledChange }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const chartable = positions.filter(
@@ -59,7 +39,7 @@ export function LivePositionChart({ positions }: Props) {
             type="checkbox"
             role="switch"
             checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
+            onChange={(e) => onEnabledChange(e.target.checked)}
           />
           Show chart
         </label>

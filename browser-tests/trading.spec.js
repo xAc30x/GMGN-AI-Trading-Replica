@@ -93,6 +93,11 @@ async function installWallet(page) {
       off: () => undefined,
       signTransaction: async transaction => {
         window.__walletSignCalls += 1;
+        // Like a real wallet popup, stay open briefly and note whether the checked facts are on screen meanwhile.
+        for (let i = 0; i < 20 && !document.querySelector('[aria-label="Checked transaction"]'); i += 1) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        window.__checkedShownDuringSign = Boolean(document.querySelector('[aria-label="Checked transaction"]'));
         transaction.signatures[0] = new Uint8Array(64).fill(7);
         return transaction;
       },
@@ -103,7 +108,7 @@ async function installWallet(page) {
 }
 
 async function installApiFixtures(page, scenario = {}) {
-  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0 };
+  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, safetyChecks: 0 };
   let paperPosition = null;
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
@@ -153,11 +158,17 @@ async function installApiFixtures(page, scenario = {}) {
         cliInstalled: false,
         liveEnabled: true,
         solLiveEnabled: true,
-        solBroadcastEnabled: true,
+        solBroadcastEnabled: scenario.broadcast ?? true,
         solWalletTrading: true,
         liveReady: true,
         rpcIsPublic: false,
         maxNativeAmount: 0.05,
+        maxPortfolioSol: 0.1,
+        maxOpenPositions: 5,
+        maxRugScore: 40,
+        minLiquidityUsd: 1000,
+        maxPriceImpactPct: 5,
+        mintSafetyRequired: true,
         maxSlippageBps: 300,
         defaultSlippageBps: 100,
         serverSigningDisabled: true,
@@ -185,15 +196,23 @@ async function installApiFixtures(page, scenario = {}) {
         mint: mintText,
         ok: true,
         blockers: [],
-        checks: [],
+        warnings: scenario.checks ? ['GoPlus: mint authority still active'] : undefined,
+        checks: scenario.checks ?? [],
         mintAuthority: null,
         freezeAuthority: null,
         rug: { ok: true, rugcheck: { scoreNormalised: 5, totalMarketLiquidity: 10000 } },
       }] } });
     }
     if (url.pathname === '/api/sol/mint-safety') {
+      counts.safetyChecks += 1;
+      if (scenario.unsafeMint && body.mint === scenario.unsafeMint) {
+        return route.fulfill({ json: {
+          ok: false, mint: body.mint, blockers: ['Freeze authority is set — tokens can be frozen'], mintAuthority: null, freezeAuthority: 'Frz1',
+          checks: [{ id: 'exists', ok: true, detail: 'Mint account found' }, { id: 'freezeAuthority', ok: false, detail: 'Freeze authority set (Frz1…)' }],
+        } });
+      }
       return route.fulfill({ json: {
-        ok: true, mint: mintText, checks: [], blockers: [], mintAuthority: null, freezeAuthority: null,
+        ok: true, mint: body.mint || mintText, checks: scenario.checks ?? [], blockers: [], mintAuthority: null, freezeAuthority: null,
       } });
     }
     if (url.pathname === '/api/sol/quote') {
@@ -267,15 +286,25 @@ async function installApiFixtures(page, scenario = {}) {
   return counts;
 }
 
+async function unlockLive(page) {
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  await expect(unlock).toBeVisible();
+  await unlock.getByLabel(/to confirm/).fill('live');
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 30 min' }).click();
+  await expect(unlock).toHaveCount(0);
+}
+
 async function openLiveTrade(page, openBuy = true) {
   await installWallet(page);
   await page.goto('/');
   await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
   page.on('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
-  await expect(page.getByRole('button', { name: /MODE PAPER/ })).toBeVisible();
-  await page.getByRole('button', { name: /MODE PAPER/ }).click();
-  await expect(page.getByRole('button', { name: /MODE LIVE/ })).toBeVisible();
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: 'PAPER' }).click();
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+  await unlockLive(page);
+  await expect(modes.getByRole('button', { name: 'LIVE' })).toHaveAttribute('aria-pressed', 'true');
   if (!openBuy) return;
   await page.getByRole('button', { name: /BUY 0.01 SOL/ }).click();
   await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toBeVisible();
@@ -342,11 +371,11 @@ test('uncertain send reconciles by signature and prevents a duplicate submission
 test('discovery screens tokens, adds a watch entry and opens the existing guarded buy flow', async ({ page }) => {
   const counts = await installApiFixtures(page, { discovery: true });
   await openLiveTrade(page, false);
-  const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · LIVE' }) });
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
   await expect(discovery.getByText('FOUND', { exact: true })).toBeVisible();
-  const blocked = discovery.getByRole('row').filter({ hasText: 'BLOCKEDTOKEN' });
+  const blocked = discovery.getByRole('listitem').filter({ hasText: 'BLOCKEDTOKEN' });
   await expect(blocked.getByRole('button', { name: /BUY/ })).toHaveCount(0);
-  const found = discovery.getByRole('row').filter({ hasText: 'FOUND' });
+  const found = discovery.getByRole('listitem').filter({ hasText: 'FOUND' });
   await found.getByRole('button', { name: '+ Watch' }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.watchlist.v1'))[0].symbol)).toBe('FOUND');
   await found.getByRole('button', { name: /BUY/ }).click();
@@ -382,17 +411,17 @@ test('paper positions open without a wallet, survive reload, and close without b
   await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
   page.on('dialog', dialog => dialog.accept());
   await page.goto('/');
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
-  await expect(page.getByRole('button', { name: /MODE PAPER/ })).toBeVisible();
-  const discovery = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Discover · PAPER' }) });
-  await discovery.getByRole('row').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await expect(page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
+  await discovery.getByRole('listitem').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
   await page.getByRole('checkbox', { name: /I understand PAPER/ }).check({ force: true });
   await page.getByRole('button', { name: 'Open paper position', exact: true }).click();
   const research = page.locator('.research-panel').filter({ has: page.getByRole('heading', { name: 'Paper portfolio & scan history', exact: true }) });
   await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
   await expect(research.getByText('0.012049 SOL', { exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
   await expect(research.getByRole('button', { name: 'Close paper' })).toBeVisible();
   await research.getByRole('button', { name: 'Close paper' }).click();
   await expect(research.getByText('manual', { exact: true })).toBeVisible();
@@ -411,7 +440,8 @@ test('research controls persist pauses and clearly separate virtual comparison f
   const counts = await installApiFixtures(page, { discovery: true });
   await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
   page.on('dialog', dialog => dialog.accept());
-  await page.goto('/'); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.goto('/'); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('button', { name: 'Research', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Research automation', exact: true });
   await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Start paper comparison', exact: true }).click();
@@ -420,14 +450,378 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await expect(panel.getByText('Scans: running · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: 'Pause background scans' }).click();
   await expect(panel.getByRole('button', { name: 'Start paper comparison' })).toBeDisabled();
-  await page.reload(); await page.getByRole('button', { name: /MODE SHADOW/ }).click();
+  await page.reload(); await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('button', { name: 'Research', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /safety-feed-v1/ })).toBeVisible();
-  await expect(page.getByRole('cell', { name: /^watch · 20\/100/ })).toBeVisible();
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
+  await page.getByRole('button', { name: 'Trade', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Discover', exact: true }).getByText('watch · 20/100', { exact: true })).toBeVisible();
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
+});
+
+test('mode banner always states the active mode and what it can do', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  const banner = page.getByRole('status', { name: 'Trading mode SHADOW' });
+  await expect(banner).toContainText('nothing touches a chain');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'SHADOW');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await expect(page.getByRole('status', { name: 'Trading mode PAPER' })).toContainText('nothing is signed or broadcast');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-mode', 'PAPER');
+});
+
+test('header reports the RPC type from server status and offers one mode switch', async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto('/');
+  const header = page.locator('header');
+  await expect(header.getByText('DEDICATED RPC', { exact: true })).toBeVisible();
+  await expect(header.getByText(/LAT \d+ms/)).toHaveCount(0);
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await expect(modes.getByRole('button')).toHaveText(['SHADOW', 'PAPER', 'LIVE ⊘']);
+  await expect(modes.getByRole('button', { name: 'SHADOW' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('LIVE needs typed confirmation, blocks on a failed preflight and can be cancelled', async ({ page }) => {
+  await installWallet(page);
+  await installApiFixtures(page, { broadcast: false });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  const checks = unlock.getByRole('list', { name: 'Preflight checks' });
+  await expect(checks.getByRole('listitem').filter({ hasText: 'GMGN_SOL_BROADCAST' })).toContainText('unset · no sends');
+  await expect(checks.getByRole('listitem').filter({ hasText: 'Wallet connected' })).toContainText('Phantom');
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  await expect(unlock.getByRole('button', { name: /Blocked · 1 preflight check failed/ })).toBeDisabled();
+  await unlock.getByRole('button', { name: /Stay in SHADOW/ }).click();
+  await expect(modes.getByRole('button', { name: 'SHADOW' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('LIVE unlock is time-boxed and Lock now returns to PAPER', async ({ page }) => {
+  await installWallet(page);
+  await installApiFixtures(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
+  const modes = page.getByRole('group', { name: 'Trading mode' });
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  const unlock = page.getByRole('dialog', { name: 'Unlock LIVE trading' });
+  await expect(unlock.getByRole('button', { name: 'Type LIVE to unlock' })).toBeDisabled();
+  await unlock.getByRole('button', { name: '15 min' }).click();
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 15 min' }).click();
+  await expect(page.getByRole('status', { name: 'Trading mode LIVE' })).toContainText('auto-locks in 15:00');
+  await page.clock.fastForward('15:01');
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('LIVE session ended — switched back to PAPER')).toBeVisible();
+
+  await modes.getByRole('button', { name: /LIVE/ }).click();
+  await expect(unlock.getByLabel(/to confirm/)).toHaveValue('');
+  await unlock.getByLabel(/to confirm/).fill('LIVE');
+  // The dialog remembers the last session length but never the typed confirmation.
+  await unlock.getByRole('button', { name: 'Unlock LIVE for 15 min' }).click();
+  await page.getByRole('button', { name: 'LOCK NOW' }).click();
+  await expect(modes.getByRole('button', { name: 'PAPER' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+// Shapes as server/mintSafety.js and server/rugScanner.js send them.
+const sampleChecks = [
+  { id: 'exists', ok: true, detail: 'Mint account found' },
+  { id: 'freezeAuthority', ok: true, detail: 'No freeze authority' },
+  { id: 'mintAuthority', ok: true, detail: 'Mint authority revoked' },
+  { id: 'rugged', ok: true, detail: 'Not marked rugged', level: 'info' },
+  { id: 'rugScore', ok: true, detail: 'RugCheck score 5 (max 50)', level: 'info' },
+  { id: 'goplus:mintable', ok: true, detail: 'Warn: GoPlus mintable=true', level: 'warn' },
+];
+
+test('watchlist rows show safety marks and selecting a row fills the inspector', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true, checks: sampleChecks });
+  await installWallet(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Inspector' });
+  await expect(inspector).toContainText('Select a token');
+
+  const watchlist = page.getByRole('region', { name: 'Watchlist' });
+  await expect(watchlist.getByRole('img', { name: 'Safety checks: 5 passed, 1 warning, 0 failed' })).toBeVisible();
+  await watchlist.getByRole('button', { name: 'Inspect TEST' }).click();
+  await expect(watchlist.getByRole('button', { name: 'Inspect TEST' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(inspector.getByRole('heading', { name: 'TEST' })).toBeVisible();
+  await expect(inspector).toContainText(mintText);
+  await expect(inspector.getByRole('status', { name: 'Safety verdict REVIEW' })).toBeVisible();
+  await expect(inspector).toContainText('6 run');
+  await expect(inspector.getByRole('region', { name: 'On-chain checks' }).getByRole('listitem')).toHaveCount(3);
+  await expect(inspector.getByRole('region', { name: 'RugCheck checks' }).getByRole('listitem')).toHaveCount(2);
+  await expect(inspector.getByRole('region', { name: 'GoPlus checks' })).toContainText('GoPlus mintable=true');
+  // The watchlist row already carries its scan, so nothing extra is fetched.
+  assert.equal(counts.safetyChecks, 0);
+
+  await inspector.getByRole('button', { name: 'Close inspector' }).click();
+  await expect(inspector).toContainText('Select a token');
+});
+
+test('selecting a Discover row fetches the full safety checks once', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true, checks: sampleChecks });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
+  await discovery.getByRole('button', { name: 'Inspect FOUND' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Inspector' });
+  await expect(inspector.getByRole('heading', { name: 'FOUND' })).toBeVisible();
+  await expect(inspector).toContainText('from Discover');
+  await expect(inspector).toContainText('$10.0K');
+  await expect(inspector).toContainText('6 run');
+  assert.equal(counts.safetyChecks, 1);
+
+  await discovery.getByRole('button', { name: 'Inspect BLOCKEDTOKEN' }).click();
+  await expect(inspector.getByRole('heading', { name: 'BLOCKEDTOKEN' })).toBeVisible();
+  await expect.poll(() => counts.safetyChecks).toBe(2);
+});
+
+test('inspector trade needs acknowledged warnings, then opens the existing paper buy dialog at the chosen amount', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true, checks: sampleChecks });
+  await installWallet(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+
+  await expect(trade.getByRole('list', { name: 'Limits' })).toContainText('This trade0.010 / 0.050');
+  // PAPER has no server portfolio caps, so no exposure or position bars are invented.
+  await expect(trade.getByRole('list', { name: 'Limits' }).getByRole('listitem')).toHaveCount(1);
+  await expect(trade).toContainText('Modeled exits: -20% stop · +30% target · 60 min timeout');
+  const button = trade.getByRole('button', { name: 'Acknowledge the warning to continue' });
+  await expect(button).toBeDisabled();
+  await trade.getByRole('checkbox', { name: /I've reviewed the warning: GoPlus mintable=true/ }).check();
+  await trade.getByRole('group', { name: 'Buy amount' }).getByRole('button', { name: '0.025 SOL' }).click();
+  await expect(trade.getByRole('list', { name: 'Limits' })).toContainText('0.025 / 0.050');
+  await trade.getByRole('button', { name: 'Continue to paper buy · 0.025 SOL' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'One-Click Buy · TEST' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Buy amount')).toHaveValue('0.025');
+  // The dialog still owns the actual buy: nothing is opened until it is confirmed there.
+  assert.equal(counts.paperOpens, 0);
+  await dialog.getByRole('checkbox', { name: /I understand PAPER/ }).check();
+  await dialog.getByRole('button', { name: 'Open paper position' }).click();
+  await expect.poll(() => counts.paperOpens).toBe(1);
+  await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toHaveCount(0);
+
+  // One position per mint: the inspector now refuses a second buy of TEST.
+  await expect(trade.getByRole('button', { name: 'Already holding · 1 position per mint' })).toBeDisabled();
+});
+
+test('inspector blocks trading a token whose full safety checks failed', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true, unsafeMint: inputMint.toBase58() });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('region', { name: 'Discover', exact: true }).getByRole('button', { name: 'Inspect BLOCKEDTOKEN' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Inspector' });
+  await expect(inspector.getByRole('status', { name: 'Safety verdict BLOCKED' })).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Blocked · failed safety checks' })).toBeDisabled();
+  await expect(inspector.getByRole('checkbox')).toHaveCount(0);
+});
+
+test('LIVE inspector shows limits and a quote preview, and a click without holding never signs', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
+  await openLiveTrade(page, false);
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+  const limits = trade.getByRole('list', { name: 'Limits' });
+  await expect(limits.getByRole('listitem')).toHaveCount(3);
+  await expect(limits).toContainText('Exposure after0.010 / 0.100');
+  await expect(limits).toContainText('Positions after1 / 5');
+  await expect(trade).toContainText('Exits are not placed on-chain');
+  const preview = trade.getByRole('region', { name: 'What your wallet will be asked to sign' });
+  await expect(preview).toContainText('You send0.01 SOL');
+  await expect(preview).toContainText('Minimum receive≥ 9 units TEST');
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  // A normal click is not enough: nothing is built or signed.
+  await send.click();
+  await page.waitForTimeout(1600);
+  assert.equal(counts.builds, 0);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+  await expect(page.getByRole('dialog', { name: /One-Click Buy/ })).toHaveCount(0);
+});
+
+test('status bar shows the latest real activity, the server limits and that the server never signs', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  const bar = page.getByRole('contentinfo', { name: 'Status bar' });
+  await expect(bar).toContainText('limits 0.05 SOL/trade · 0.1 SOL total · 5 positions · 3% slippage · scans fail-closed');
+  await expect(bar).toContainText('server signing: disabled');
+
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  // SHADOW's mock log lines are not carried into PAPER.
+  await expect(bar).toContainText('No activity yet this session');
+  const discovery = page.getByRole('region', { name: 'Discover', exact: true });
+  await discovery.getByRole('listitem').filter({ hasText: 'FOUND' }).getByRole('button', { name: /BUY/ }).click();
+  const dialog = page.getByRole('dialog', { name: /One-Click Buy/ });
+  await dialog.getByRole('checkbox', { name: /I understand PAPER/ }).check();
+  await dialog.getByRole('button', { name: 'Open paper position' }).click();
+  await expect(bar).toContainText('PAPER position opened: FOUND · 0.01 SOL');
+});
+
+test('settings is a setup checklist that shows what blocks each mode', async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const setup = page.getByRole('dialog', { name: 'Setup & credentials' });
+  const modes = setup.getByRole('list', { name: 'Mode readiness' });
+  await expect(modes.getByRole('listitem').filter({ hasText: 'SHADOW' })).toContainText('Ready');
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
+  await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 1');
+  // The page is split into sections, listed in the side navigation in page order.
+  const nav = setup.getByRole('navigation', { name: 'Settings sections' });
+  await expect(nav.getByRole('button')).toHaveText(['Access & wallet', 'Network & RPC', 'Safety gates', 'Trade limits', 'Execution gates', 'Experimental']);
+  // Safety gates list the server's real rules, with thresholds from /api/health where the server reports them.
+  const rules = setup.getByRole('region', { name: 'Safety gates' }).getByRole('table', { name: 'Safety rules' });
+  await expect(rules.getByRole('row', { name: /Largest holder/ })).toContainText('under 40% · data required');
+  await expect(rules.getByRole('row', { name: /Largest holder/ })).toContainText('BLOCK');
+  await expect(rules.getByRole('row', { name: /Mintable/ })).toContainText('WARN');
+  await expect(rules.getByRole('row', { name: /Normalised risk score/ })).toContainText('≤ 40GMGN_MAX_RUG_SCORE');
+  await expect(rules.getByRole('row', { name: /Market liquidity/ })).toContainText('≥ $1,000GMGN_MIN_LIQUIDITY_USD');
+  await expect(rules.getByRole('row', { name: /Price impact/ })).toContainText('≤ 5%GMGN_MAX_PRICE_IMPACT_PCT');
+  await expect(rules.getByRole('row', { name: /Both scanners unavailable/ })).toContainText('fail closed');
+  const gates = setup.getByRole('region', { name: 'Execution gates' });
+  await expect(gates).toContainText('GMGN_SOL_BROADCAST');
+  await expect(gates).toContainText('server signingdisabled ✓');
+  await expect(setup.getByRole('region', { name: 'Trade limits' })).toContainText('per trade0.05 SOL');
+  await expect(setup.getByRole('region', { name: 'Access & wallet' }).getByLabel('Local access token')).toBeVisible();
+  await nav.getByRole('button', { name: 'Execution gates' }).click();
+  await expect(nav.getByRole('button', { name: 'Execution gates' })).toHaveAttribute('aria-current', 'true');
+  await expect(gates).toBeInViewport();
+
+  await setup.getByLabel('Local access token').fill('browser-fixture-token');
+  await setup.getByRole('button', { name: 'Save token' }).click();
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Ready');
+  // No wallet is connected in this test, so LIVE is now blocked by the wallet step.
+  await expect(modes.getByRole('listitem').filter({ hasText: 'LIVE' })).toContainText('Blocked by step 2');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), 'browser-fixture-token');
+
+  await setup.getByRole('button', { name: 'Forget' }).click();
+  await expect(modes.getByRole('listitem').filter({ hasText: 'PAPER' })).toContainText('Blocked by step 1');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('gmgn-local-token')), null);
+});
+
+test('settings can test any mint with the server check, without trading', async ({ page }) => {
+  const counts = await installApiFixtures(page, { checks: sampleChecks, unsafeMint: inputMint.toBase58() });
+  await page.addInitScript(() => { sessionStorage.setItem('gmgn-local-token', 'browser-fixture-token'); });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const box = page.getByRole('dialog', { name: 'Setup & credentials' }).getByRole('region', { name: 'Test a mint' });
+  const input = box.getByLabel('Mint address to test');
+  const scan = box.getByRole('button', { name: 'Scan' });
+
+  // A malformed address is refused in the browser and never reaches the server.
+  await input.fill('not-a-mint');
+  await scan.click();
+  await expect(box.getByRole('alert')).toContainText('not a Solana mint address');
+  assert.equal(counts.safetyChecks, 0);
+
+  await input.fill(mintText);
+  await scan.click();
+  await expect(box.getByRole('status', { name: 'Test verdict REVIEW' })).toBeVisible();
+  await expect(box.getByRole('region', { name: 'On-chain checks' })).toContainText('Mint account found');
+
+  await input.fill(inputMint.toBase58());
+  await input.press('Enter');
+  await expect(box.getByRole('status', { name: 'Test verdict BLOCKED' })).toContainText('Freeze authority is set');
+  assert.equal(counts.safetyChecks, 2);
+  // Testing never quotes, builds, signs or sends.
+  assert.deepEqual([counts.builds, counts.sends, counts.signatures], [0, 0, 0]);
+});
+
+test('watchlist matrix view shows every check per token and lists every warning', async ({ page }) => {
+  await installApiFixtures(page, { discovery: true, checks: sampleChecks });
+  await installWallet(page);
+  page.on('dialog', dialog => dialog.accept());
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  const watchlist = page.getByRole('region', { name: 'Watchlist' });
+  await watchlist.getByRole('group', { name: 'Watchlist view' }).getByRole('button', { name: 'Matrix' }).click();
+  const matrix = watchlist.getByRole('table', { name: 'Safety matrix' });
+  const row = matrix.getByRole('row').filter({ hasText: 'TEST' });
+  // One cell per check the fixture scan returned, plus the token and verdict cells.
+  await expect(row.getByRole('cell')).toHaveCount(sampleChecks.length + 1);
+  await expect(row).toContainText('REVIEW');
+  await expect(row.getByLabel('mintable: warn')).toBeVisible();
+  await expect(watchlist.getByRole('list', { name: 'Warnings and failures' })).toContainText('GoPlus mintable=true');
+
+  await row.getByRole('button', { name: 'TEST' }).click();
+  await expect(page.getByRole('complementary', { name: 'Inspector' }).getByRole('heading', { name: 'TEST' })).toBeVisible();
+  await watchlist.getByRole('button', { name: 'Table' }).click();
+  await expect(watchlist.getByRole('button', { name: 'Inspect TEST' })).toBeVisible();
+});
+
+async function holdButton(page, button, ms) {
+  await button.scrollIntoViewIfNeeded();
+  const box = await button.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(ms);
+  await page.mouse.up();
+}
+
+test('holding the LIVE send button signs through the existing validated flow, then blocks a second buy', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true });
+  await openLiveTrade(page, false);
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  // Releasing early cancels.
+  await holdButton(page, send, 500);
+  await page.waitForTimeout(1200);
+  assert.equal(counts.builds, 0);
+  await holdButton(page, send, 1600);
+  await expect(trade.getByRole('status')).toContainText('Confirmed:', { timeout: 10_000 });
+  assert.equal(counts.builds, 1);
+  assert.equal(counts.sends, 1);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 1);
+  // The real, checked transaction values were on screen while the wallet was being asked to sign.
+  assert.equal(await page.evaluate(() => window.__checkedShownDuringSign), true);
+  const checked = trade.getByRole('region', { name: 'Checked transaction' });
+  await expect(checked).toContainText('You send0.01 SOL');
+  await expect(checked).toContainText('Slippage limit');
+  await expect(checked).toContainText('Network fee (RPC estimate)');
+  await expect(trade.getByRole('region', { name: 'What your wallet will be asked to sign' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.trades.v1') || '[]')[0]?.status)).toBe('confirmed');
+  await expect(trade.getByRole('button', { name: 'Already holding · 1 position per mint' })).toBeDisabled();
+  await expect(page.getByRole('contentinfo', { name: 'Status bar' })).toContainText('SOL wallet swap: TEST · 0.01 SOL');
+});
+
+test('LIVE hold-to-send stops before the wallet when the built transaction fails local checks', async ({ page }) => {
+  const counts = await installApiFixtures(page, { discovery: true, unsafe: true });
+  await openLiveTrade(page, false);
+  await page.getByRole('region', { name: 'Watchlist' }).getByRole('button', { name: 'Inspect TEST' }).click();
+  const trade = page.getByRole('complementary', { name: 'Inspector' }).getByRole('region', { name: 'Trade' });
+  const send = trade.getByRole('button', { name: 'Hold to send to wallet · 0.01 SOL' });
+  await expect(send).toBeEnabled();
+  await holdButton(page, send, 1600);
+  await expect(trade.getByRole('alert')).toBeVisible({ timeout: 10_000 });
+  assert.equal(counts.builds, 1);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 0);
+  assert.equal(counts.sends, 0);
+  // A transaction that failed the checks never shows as checked.
+  await expect(trade.getByRole('region', { name: 'Checked transaction' })).toHaveCount(0);
 });
 
 test('live chart starts off, shows a sandboxed DexScreener frame for a held coin, and remembers the switch', async ({ page }) => {
@@ -472,4 +866,40 @@ test('live chart switch stays on after a reload and charts nothing for demo rows
   await page.reload();
   await expect(panel.getByRole('switch', { name: 'Show chart' })).toBeChecked();
   await expect(panel.locator('iframe')).toHaveCount(0);
+});
+
+test('the Experimental switch in Settings turns the live chart on under open positions, sharing one setting', async ({ page }) => {
+  const chartRequests = [];
+  await page.route('https://dexscreener.com/**', route => {
+    chartRequests.push(route.request().url());
+    return route.fulfill({ contentType: 'text/html', body: '<p>chart fixture</p>' });
+  });
+  await installApiFixtures(page);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 5_000 });
+
+  const panel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Live chart' }) });
+  await expect(panel.getByRole('switch', { name: 'Show chart' })).not.toBeChecked();
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const setup = page.getByRole('dialog', { name: 'Setup & credentials' });
+  const experimental = setup.getByRole('region', { name: 'Experimental' });
+  const settingSwitch = experimental.getByRole('switch', { name: 'Live position chart' });
+  await expect(settingSwitch).not.toBeChecked();
+  assert.equal(chartRequests.length, 0);
+  await settingSwitch.check();
+  await setup.getByRole('button', { name: 'Close' }).last().click();
+
+  // The panel follows the Settings switch and charts the held coin.
+  await expect(panel.getByRole('switch', { name: 'Show chart' })).toBeChecked();
+  await expect(panel.locator('iframe')).toHaveAttribute('src', `https://dexscreener.com/solana/${mintText}?embed=1&theme=dark&trades=0&info=0`);
+  assert.equal(await page.evaluate(() => localStorage.getItem('gmgn.liveChart.enabled.v1')), 'true');
+
+  // Turning it off on the panel turns the Settings switch off too.
+  await panel.getByRole('switch', { name: 'Show chart' }).uncheck();
+  await expect(panel.locator('iframe')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(setup.getByRole('region', { name: 'Experimental' }).getByRole('switch', { name: 'Live position chart' })).not.toBeChecked();
 });

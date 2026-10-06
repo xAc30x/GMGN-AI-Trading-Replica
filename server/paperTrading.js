@@ -32,7 +32,8 @@ export function paperPortfolio(now = Date.now(), accountId = 'manual') {
     const all = db.prepare('SELECT data FROM paper_positions WHERE account_id=?').all(accountId).map(r => JSON.parse(r.data));
     const open = all.filter(p => p.state === 'open');
     const closed = all.filter(p => p.state === 'closed');
-    const realised = closed.reduce((sum, p) => sum + BigInt(p.realisedPnlLamports), 0n);
+    // Open positions carry realised P&L from partial sells; closed ones carry their full total.
+    const realised = all.reduce((sum, p) => sum + BigInt(p.realisedPnlLamports ?? '0'), 0n);
     const valued = open.every(p => p.mark && !p.lastError && now - p.mark.at <= 45000);
     const equity = valued ? BigInt(balance.cash) + open.reduce((sum, p) => sum + BigInt(p.mark.netLamports), 0n) : null;
     return { account: balance, accountId, model: PAPER_MODEL, positions, at: now,
@@ -51,6 +52,7 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
   const recordEvent = (db, at, id, kind, data) => event(db, at, id, kind, data, accountId);
   let refreshing = null;
   const closing = new Map();
+  const partials = new Set();
   async function freshQuote(inputMint, outputMint, amountAtomic, slippageBps) {
     const intent = { inputMint, outputMint, amountAtomic, slippageBps };
     const q = await quote(intent);
@@ -126,9 +128,14 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
         return withResearch(db => transaction(db, () => {
           const current = readPosition(db, id, accountId);
           if (current.state === 'closed') return current;
+          // Partial sells refuse once exitPending is set, so this is a second guard: never credit a stale size.
+          if (current.quantityAtomic !== p.quantityAtomic) fail('Position size changed during exit; retrying', 409);
           const cash = BigInt(account(db, accountId).cash);
+          const priorProceeds = BigInt(current.proceedsLamports ?? '0');
+          const priorRealised = BigInt(current.realisedPnlLamports ?? '0');
           Object.assign(current, { state: 'closed', closedAt: now(), exitReason: current.exitPending,
-            exitQuote: q, proceedsLamports: String(net), realisedPnlLamports: String(net - BigInt(current.costLamports)),
+            exitQuote: q, proceedsLamports: String(priorProceeds + net),
+            realisedPnlLamports: String(priorRealised + net - BigInt(current.costLamports)),
             exitPending: null, lastError: null });
           save(db, current);
           setCash(db, accountId, cash + net);
@@ -147,6 +154,57 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
     })().finally(() => closing.delete(id));
     closing.set(id, work);
     return work;
+  }
+
+  /**
+   * Sell a whole-number percent (1-100) of an open position. 100 is exactly close().
+   * A partial sell keeps the position open with a proportionally smaller quantity and cost,
+   * so stop/target checks apply to what is left. It is never retried automatically.
+   */
+  async function sell(id, percent = 100) {
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) fail('Sell percent must be a whole number from 1 to 100');
+    if (percent === 100) return close(id, 'manual');
+    if (closing.has(id) || partials.has(id)) fail('A sale for this position is already in progress', 409);
+    partials.add(id);
+    try {
+      const p = withResearch(db => readPosition(db, id, accountId));
+      if (!p) fail('Paper position not found', 404);
+      if (p.state !== 'open') fail('Paper position is already closed', 409);
+      if (p.exitPending) fail('A full exit is already pending for this position', 409);
+      const sellAtomic = BigInt(p.quantityAtomic) * BigInt(percent) / 100n;
+      if (sellAtomic <= 0n) fail('Sell amount rounds to zero');
+      await sleep(p.model.latencyMs);
+      const q = await freshQuote(p.mint, SOL_MINT, String(sellAtomic), p.slippageBps);
+      const net = BigInt(q.otherAmountThreshold) - BigInt(p.model.feeLamports);
+      if (net <= 0n) fail('Sale is too small to cover the modeled network fee');
+      return withResearch(db => transaction(db, () => {
+        const current = readPosition(db, id, accountId);
+        if (current.state !== 'open' || current.exitPending || current.quantityAtomic !== p.quantityAtomic) {
+          fail('Position changed while the sale was being quoted; try again', 409);
+        }
+        const quantity = BigInt(current.quantityAtomic);
+        const cost = BigInt(current.costLamports);
+        const costSold = cost * sellAtomic / quantity;
+        const pnl = net - costSold;
+        const cash = BigInt(account(db, accountId).cash);
+        Object.assign(current, {
+          quantityAtomic: String(quantity - sellAtomic), costLamports: String(cost - costSold),
+          proceedsLamports: String(BigInt(current.proceedsLamports ?? '0') + net),
+          realisedPnlLamports: String(BigInt(current.realisedPnlLamports ?? '0') + pnl),
+          partialExits: [...(current.partialExits ?? []), { at: now(), percent, quantityAtomic: String(sellAtomic),
+            proceedsLamports: String(net), realisedPnlLamports: String(pnl), quote: q }],
+          // The previous mark valued the old size; equity stays unknown until the next refresh.
+          mark: null, lastError: null,
+        });
+        save(db, current);
+        setCash(db, accountId, cash + net);
+        recordEvent(db, now(), id, 'partial_exit', { percent, quantityAtomic: String(sellAtomic),
+          proceedsLamports: String(net), realisedPnlLamports: String(pnl) });
+        return current;
+      }));
+    } finally {
+      partials.delete(id);
+    }
   }
 
   async function tick() {
@@ -180,5 +238,5 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
     if (!refreshing) refreshing = tick().finally(() => { refreshing = null; });
     return refreshing;
   }
-  return { open, close, refresh };
+  return { open, close, sell, refresh };
 }

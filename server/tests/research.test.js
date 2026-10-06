@@ -31,7 +31,9 @@ function fixture(t, options = {}) {
     quote: async intent => {
       calls.push({ ...intent, at });
       if (broken) throw new Error('No sell route');
-      const outAmount = intent.inputMint === SOL_MINT ? '1000000' : sell;
+      // `scaled` makes sell quotes proportional to the amount sold (for partial-sell checks).
+      const outAmount = intent.inputMint === SOL_MINT ? '1000000'
+        : options.scaled ? String(BigInt(intent.amountAtomic) * 50n) : sell;
       return { ...intent, inAmount: intent.amountAtomic, outAmount,
         otherAmountThreshold: String(BigInt(outAmount) * BigInt(10000 - intent.slippageBps) / 10000n),
         swapMode: 'ExactIn', priceImpactPct: '0.001', routePlan: [{}] };
@@ -152,4 +154,91 @@ test('insufficient cash and position caps are checked atomically at fill time', 
   for (let i = 0; i < 5; i++) await f.engine.open({ ...entry, id: `paper-request-${i + 100}`, mint: `mint${i}` });
   await assert.rejects(f.engine.open(entry), /5 open positions/);
   assert.equal(paperPortfolio().stats.open, 5);
+});
+
+test('partial sell keeps the position open with proportional size, cost and realised P&L', async t => {
+  const f = fixture(t, { scaled: true });
+  await f.engine.open(entry);
+  await f.engine.refresh();
+  const part = await f.engine.sell(entry.id, 25);
+  assert.equal(part.state, 'open');
+  assert.equal(part.quantityAtomic, '742500');
+  assert.equal(part.costLamports, '39036960');
+  assert.equal(part.proceedsLamports, '12241250');
+  assert.equal(part.realisedPnlLamports, '-771070');
+  assert.equal(part.mark, null);
+  assert.deepEqual(part.partialExits.map(x => [x.percent, x.quantityAtomic]), [[25, '247500']]);
+  let p = paperPortfolio(f.time());
+  assert.equal(p.account.cash, '960191970');
+  assert.equal(p.stats.open, 1); assert.equal(p.stats.closed, 0);
+  assert.equal(p.stats.realisedPnlLamports, '-771070');
+  assert.equal(p.stats.equityLamports, null);
+  assert.equal(p.events[0].kind, 'partial_exit');
+
+  const closed = await f.engine.sell(entry.id, 100);
+  assert.equal(closed.state, 'closed'); assert.equal(closed.exitReason, 'manual');
+  assert.equal(f.calls.at(-1).amountAtomic, '742500');
+  assert.equal(closed.proceedsLamports, '48985000');
+  // Same as one full sale (-3054280) minus the second modeled fee.
+  assert.equal(closed.realisedPnlLamports, '-3064280');
+  p = paperPortfolio(f.time());
+  assert.equal(p.account.cash, '996935720');
+  assert.equal(p.stats.realisedPnlLamports, '-3064280');
+  assert.equal(p.stats.wins, 0);
+});
+
+test('100% sell is exactly the existing close; invalid percents change nothing', async t => {
+  const f = fixture(t);
+  await f.engine.open(entry);
+  for (const bad of [0, 101, 12.5, -10, Number.NaN]) {
+    await assert.rejects(f.engine.sell(entry.id, bad), /whole number from 1 to 100/);
+  }
+  assert.equal(f.calls.length, 1);
+  assert.equal(paperPortfolio().account.cash, '947950720');
+  const closed = await f.engine.sell(entry.id, 100);
+  assert.equal(closed.proceedsLamports, '49490000');
+  assert.equal(closed.realisedPnlLamports, '-2559280');
+  await assert.rejects(f.engine.sell(entry.id, 25), /already closed/);
+  assert.equal(paperPortfolio().account.cash, '997440720');
+});
+
+test('stop / target checks after a partial sell value only the remaining tokens', async t => {
+  const f = fixture(t, { scaled: true });
+  await f.engine.open(entry);
+  await f.engine.sell(entry.id, 75);
+  await f.engine.refresh();
+  assert.equal(f.calls.at(-1).amountAtomic, '247500');
+  const p = paperPortfolio(f.time()).positions[0];
+  assert.equal(p.state, 'open');
+  assert.equal(p.mark.netLamports, '12241250');
+});
+
+test('partial sells cannot race a pending exit or each other', async t => {
+  const f = fixture(t, { scaled: true });
+  await f.engine.open(entry);
+  const second = createPaperEngine(f.engineOptions);
+  const results = await Promise.allSettled([f.engine.sell(entry.id, 25), second.sell(entry.id, 10)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.match(results.find(r => r.status === 'rejected').reason.message, /changed while the sale/);
+  assert.equal(paperPortfolio().positions[0].partialExits.length, 1);
+  assert.equal(paperPortfolio().events.filter(e => e.kind === 'partial_exit').length, 1);
+
+  f.broken(true);
+  await assert.rejects(f.engine.close(entry.id), /No sell route/);
+  f.broken(false);
+  await assert.rejects(f.engine.sell(entry.id, 25), /full exit is already pending/);
+});
+
+test('a partial sell that overlaps a full exit is rejected; the exit credits the whole position once', async t => {
+  const f = fixture(t, { scaled: true });
+  await f.engine.open(entry);
+  const second = createPaperEngine(f.engineOptions);
+  const [part, full] = await Promise.allSettled([f.engine.sell(entry.id, 25), second.close(entry.id)]);
+  assert.match(part.reason.message, /changed while the sale/);
+  assert.equal(full.status, 'fulfilled');
+  const p = paperPortfolio(f.time());
+  assert.equal(p.positions[0].state, 'closed');
+  assert.equal(p.positions[0].partialExits, undefined);
+  assert.equal(p.positions[0].realisedPnlLamports, '-3054280');
+  assert.equal(p.account.cash, '996945720');
 });

@@ -1,0 +1,17 @@
+# One-off backup run, started by gmgn-backup.timer.
+# Install as /etc/systemd/system/gmgn-backup.service.
+
+[Unit]
+Description=Back up the GMGN trading app databases
+
+[Service]
+Type=oneshot
+User=gmgn
+Group=gmgn
+ExecStart=/usr/bin/node /opt/gmgn-trader/deploy/backup-db.mjs /var/lib/gmgn-trader /var/backups/gmgn-trader 14
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/gmgn-trader /var/backups/gmgn-trader

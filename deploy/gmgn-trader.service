@@ -1,0 +1,49 @@
+# systemd service for the trading app. Install as /etc/systemd/system/gmgn-trader.service.
+# The app code lives in /opt/gmgn-trader (owned by root, read-only to the app);
+# its databases live in /var/lib/gmgn-trader (the only place it may write).
+
+[Unit]
+Description=GMGN trading dashboard (paper trading by default)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gmgn
+Group=gmgn
+WorkingDirectory=/opt/gmgn-trader
+Environment=NODE_ENV=production
+Environment=PORT=8787
+EnvironmentFile=/etc/gmgn-trader/gmgn.env
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+
+# Writable data folder, created as /var/lib/gmgn-trader and owned by the gmgn user.
+StateDirectory=gmgn-trader
+StateDirectoryMode=0700
+UMask=0077
+
+# Lockdown: the app can read its code, write only its data folder, and cannot gain privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+# MemoryDenyWriteExecute is left off on purpose: Node's JavaScript compiler needs it.
+
+[Install]
+WantedBy=multi-user.target

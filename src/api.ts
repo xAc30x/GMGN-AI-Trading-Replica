@@ -1,5 +1,6 @@
 /** Thin client for the local GMGN quote backend. Secrets never touch the browser. */
 
+import { noteSignInRequired } from './auth';
 import { getLocalToken } from './localToken';
 
 export interface HealthResponse {
@@ -73,6 +74,7 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) {
+    noteSignInRequired(res.status, body);
     throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
   }
   return body;

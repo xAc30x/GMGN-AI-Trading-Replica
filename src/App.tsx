@@ -3,6 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import type { LiveBuyMeta } from './components/BuyModal';
 import { BuyModal } from './components/BuyModal';
 import { CredentialsPanel } from './components/CredentialsPanel';
+import type { Account } from './components/AuthGate';
 import { DecisionLog } from './components/DecisionLog';
 import { DemoBanner } from './components/DemoBanner';
 import { GateFunnel } from './components/GateFunnel';
@@ -62,7 +63,7 @@ function nowTs(): string {
   return utcClock();
 }
 
-export default function App() {
+export default function App({ account }: { account: Account }) {
   const wallet = useWallet();
   const [tab, setTab] = useState<TabId>('token');
   const [chain, setChain] = useState<Chain>('SOL');
@@ -585,6 +586,7 @@ export default function App() {
         onClose={() => setCredOpen(false)}
         liveChartOn={liveChartOn}
         onLiveChartChange={setLiveChartOn}
+        account={account}
         onReplayTour={() => {
           setCredOpen(false);
           setTab('token');

@@ -4,6 +4,7 @@ import type { HealthResponse } from '../api';
 import { fetchHealth, saveCredentials } from '../api';
 import { getLocalToken, setLocalToken } from '../localToken';
 import { ALLOWLISTED_MINTS, safetyRules } from '../safetyRules';
+import type { Account } from './AuthGate';
 import { MintTest } from './MintTest';
 import { limitRows, modeReadiness, settingsSections, setupSteps, type StepStatus } from '../setupChecklist';
 import { isPublicSolanaRpc } from '../solana/constants';
@@ -17,6 +18,8 @@ interface Props {
   onLiveChartChange: (next: boolean) => void;
   /** Closes Settings and starts the first-launch tour again. */
   onReplayTour: () => void;
+  /** Who is signed in, and how to sign out. */
+  account: Account;
 }
 
 const GLYPH: Record<StepStatus, string> = { pass: '✓', warn: '!', fail: '✕', info: '' };
@@ -30,7 +33,7 @@ function sourceLabel(source?: string, present?: boolean): string {
 }
 
 /** Settings as a setup checklist: what is ready, what blocks each mode, and which values the server owns. */
-export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, onLiveChartChange, onReplayTour }: Props) {
+export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, onLiveChartChange, onReplayTour, account }: Props) {
   const wallet = useWallet();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
@@ -156,6 +159,10 @@ export function CredentialsPanel({ open, onClose, onReadyChange, liveChartOn, on
           <span className="setup-checked">{checkedAt ? `status checked ${checkedAt}` : 'checking status…'}</span>
           <button type="button" className="btn-ghost btn-small" onClick={onReplayTour}>
             Replay tour
+          </button>
+          <span className="setup-account" title="Signed in">{account.email}</span>
+          <button type="button" className="btn-ghost btn-small" onClick={account.onSignOut}>
+            Sign out
           </button>
           <button type="button" className="x" onClick={onClose} aria-label="Close">
             ×

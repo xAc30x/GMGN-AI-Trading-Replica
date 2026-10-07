@@ -126,7 +126,7 @@ test('many failures from one address lock that address out across emails', async
 
 test('other API routes need a session, and sign-out ends it', async (t) => {
   const { call } = await startApp(t);
-  assert.equal((await call('/api/protected')).status, 401);
+  assert.deepEqual(await call('/api/protected').then(r => [r.status, r.body.code]), [401, 'SIGN_IN_REQUIRED']);
   assert.equal((await call('/api/protected', { cookie: `${SESSION_COOKIE}=made-up` })).status, 401);
   assert.equal((await call('/api/auth/me')).status, 401);
 

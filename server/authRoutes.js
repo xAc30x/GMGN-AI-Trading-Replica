@@ -207,7 +207,7 @@ export function registerAuthRoutes(app, {
     if (req.originalUrl.startsWith(AUTH_PREFIX)) return next();
     try {
       const session = currentUser(req);
-      if (!session) return res.status(401).json({ ok: false, error: 'Sign in required' });
+      if (!session) return res.status(401).json({ ok: false, error: 'Sign in required', code: 'SIGN_IN_REQUIRED' });
       req.user = { id: session.userId, email: session.email };
       next();
     } catch (e) {

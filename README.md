@@ -93,6 +93,11 @@ on its next request. The server prints how many emails are on the list when it s
 GMGN_ALLOWED_EMAILS=you@example.com
 ```
 
+**Email sign-up is closed by default.** Otherwise anyone who knows an allowed email could create
+that account before its owner does. To create your account, set `GMGN_SIGNUP_OPEN=1` in
+`server/.env`, restart the server, sign up, then set it back to `0` and restart again. Signing in
+to an existing account and Google/Apple sign-in work either way.
+
 **Email and password:** passwords need at least 12 characters and are stored only as salted scrypt
 hashes in `server/.auth.sqlite` (owner-only file, git-ignored; set `GMGN_AUTH_DB_PATH` to move it,
 and include it in backups). There is no "forgot password" or email verification yet.

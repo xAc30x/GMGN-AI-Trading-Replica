@@ -85,6 +85,7 @@ function readCookie(req, name) {
  * @param {{
  *   openStore?: () => ReturnType<typeof createAuthStore>,
  *   allowedEmails?: () => Set<string>,
+ *   signupOpen?: () => boolean,
  *   secureCookies?: () => boolean,
  *   now?: () => number,
  *   externalProviders?: Record<'google' | 'apple', () => ReturnType<typeof createOidcProvider> | null>,
@@ -94,6 +95,8 @@ function readCookie(req, name) {
 export function registerAuthRoutes(app, {
   openStore = createAuthStore,
   allowedEmails = () => parseAllowedEmails(process.env.GMGN_ALLOWED_EMAILS),
+  // Off unless GMGN_SIGNUP_OPEN=1, so nobody can claim an allow-listed email before its owner does.
+  signupOpen = () => process.env.GMGN_SIGNUP_OPEN === '1',
   secureCookies = () => process.env.NODE_ENV === 'production',
   now = Date.now,
   externalProviders = {
@@ -160,6 +163,13 @@ export function registerAuthRoutes(app, {
   app.post('/api/auth/signup', requireJson, async (req, res) => {
     const ipKey = `ip:${req.ip}`;
     if (lockedOut(res, [[ipLimiter, ipKey]])) return;
+    if (!signupOpen()) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Sign-up is closed. The server owner can open it with GMGN_SIGNUP_OPEN=1.',
+        code: 'SIGNUP_CLOSED',
+      });
+    }
     try {
       const email = normalizeEmail(req.body?.email);
       if (!allowedEmails().has(email)) {

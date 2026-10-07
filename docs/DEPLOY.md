@@ -129,8 +129,8 @@ In the editor, fill in:
 
 Save with `Ctrl+O`, `Enter`, then exit with `Ctrl+X`.
 
-`GMGN_SIGNUP_OPEN` is already in the file, set to `0`. It takes effect once the sign-up switch is
-added to the app. Until then, sign-up is limited by `GMGN_ALLOWED_EMAILS` alone.
+Leave `GMGN_SIGNUP_OPEN=0` for now. While it is `0`, nobody can sign up with an email and
+password, not even with an allowed email. You open it briefly in step 10 to create your account.
 
 Optional Google sign-in: add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` the same way, and use
 `https://trader.example.com/api/auth/google/callback` as the redirect address in Google's console.
@@ -169,9 +169,19 @@ at this server yet, or ports 80/443 being closed.
 
 ## 10. Create your account
 
-1. Open `https://trader.example.com` and choose **Sign up**.
-2. Use the email from `GMGN_ALLOWED_EMAILS` and a long password.
-3. Always use the `https://` address. The sign-in cookie only works over HTTPS.
+Sign-up is closed (step 7), so open it just long enough to create your account:
+
+1. Run `sudo nano /etc/gmgn-trader/gmgn.env`, change `GMGN_SIGNUP_OPEN=0` to `GMGN_SIGNUP_OPEN=1`,
+   save and exit, then run `sudo systemctl restart gmgn-trader`.
+2. Open `https://trader.example.com` and choose **Sign up**.
+3. Use the email from `GMGN_ALLOWED_EMAILS` and a long password (at least 12 characters).
+4. Close sign-up again: run `sudo nano /etc/gmgn-trader/gmgn.env`, change it back to
+   `GMGN_SIGNUP_OPEN=0`, save and exit, then run `sudo systemctl restart gmgn-trader`.
+5. Check it worked: sign out, then try **Sign up** again. You should see "Sign-up is closed".
+   Signing in with your account still works.
+
+Always use the `https://` address. The sign-in cookie only works over HTTPS. If you only use
+Google or Apple sign-in, you can skip steps 1, 4 and 5: those don't need sign-up to be open.
 
 ## 11. Enter the app token
 

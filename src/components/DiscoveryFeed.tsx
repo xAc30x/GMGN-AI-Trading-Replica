@@ -97,7 +97,7 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch, selectedMint, o
   const passed = tokens.filter((t) => t.safety.ok).length;
 
   return (
-    <section className={`panel discover-panel ${loading ? 'scanning' : ''}`} aria-labelledby="discover-title">
+    <section data-tour="discover" className={`panel discover-panel ${loading ? 'scanning' : ''}`} aria-labelledby="discover-title">
       <div className="panel-head">
         <h2 id="discover-title">Discover</h2>
         <span className="panel-sub">DexScreener</span>

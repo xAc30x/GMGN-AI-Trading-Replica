@@ -18,7 +18,7 @@ const SIGNING_TEXT = {
 export function StatusBar({ lastLog, health }: Props) {
   const signing = serverSigning(health);
   return (
-    <footer className="status-bar" aria-label="Status bar">
+    <footer className="status-bar" data-tour="status-bar" aria-label="Status bar">
       <span className="status-last" title={lastLog ? `${lastLog.ts} [${lastLog.category}] ${lastLog.message}` : undefined}>
         {lastLog ? `${lastLog.ts} · ${lastLog.message}` : 'No activity yet this session'}
       </span>

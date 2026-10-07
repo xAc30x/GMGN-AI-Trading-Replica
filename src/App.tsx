@@ -47,6 +47,8 @@ import {
 } from './data/mockData';
 import type { Chain, LogEntry, Position, ScreenToken, TabId, TradeMode } from './types';
 import type { SellPercent } from './sellPercents';
+import { Tutorial } from './components/Tutorial';
+import { markTutorialSeen, shouldShowTutorial } from './tutorial';
 
 function utcClock(): string {
   const d = new Date();
@@ -76,6 +78,7 @@ export default function App() {
   const [credOpen, setCredOpen] = useState(false);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [unlockOpen, setUnlockOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(shouldShowTutorial);
   /** Epoch ms when the current LIVE session auto-locks; null outside LIVE. */
   const [liveUntil, setLiveUntil] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -582,6 +585,11 @@ export default function App() {
         onClose={() => setCredOpen(false)}
         liveChartOn={liveChartOn}
         onLiveChartChange={setLiveChartOn}
+        onReplayTour={() => {
+          setCredOpen(false);
+          setTab('token');
+          setTourOpen(true);
+        }}
         onReadyChange={() => {
           void fetchHealth().then(setHealth).catch(() => setHealth(null));
         }}
@@ -593,6 +601,14 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onSave={handleSaveSettings}
       />
+      {tourOpen && (
+        <Tutorial
+          onClose={() => {
+            markTutorialSeen();
+            setTourOpen(false);
+          }}
+        />
+      )}
       {toast && <div className="scan-toast">{toast}</div>}
     </div>
   );

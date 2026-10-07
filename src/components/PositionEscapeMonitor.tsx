@@ -47,7 +47,7 @@ export function PositionEscapeMonitor({ positions, onClose, livePnl = {}, refres
   const hasLive = positions.some((p) => !p.demo);
 
   return (
-    <section className="panel">
+    <section className="panel" data-tour="holdings">
       <div className="panel-head">
         <h2>Tracked holdings</h2>
         {hasLive && (

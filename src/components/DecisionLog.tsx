@@ -6,7 +6,7 @@ interface Props {
 
 export function DecisionLog({ logs }: Props) {
   return (
-    <section className="panel log-panel">
+    <section className="panel log-panel" data-tour="activity">
       <div className="panel-head">
         <h2>📈 Session activity · not a persistent audit log</h2>
       </div>

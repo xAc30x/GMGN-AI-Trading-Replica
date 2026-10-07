@@ -70,7 +70,7 @@ export function TokenInspector({ target, onClose, mode, health, amount, onAmount
 
   if (!target) {
     return (
-      <aside className="ws-col ws-inspector panel" aria-label="Inspector">
+      <aside className="ws-col ws-inspector panel" data-tour="inspector" aria-label="Inspector">
         <div className="panel-head">
           <h2>Inspector</h2>
         </div>
@@ -112,7 +112,7 @@ export function TokenInspector({ target, onClose, mode, health, amount, onAmount
   if (rc?.totalHolders != null) stats.push(['Holders', rc.totalHolders.toLocaleString()]);
 
   return (
-    <aside className="ws-col ws-inspector panel" aria-label="Inspector">
+    <aside className="ws-col ws-inspector panel" data-tour="inspector" aria-label="Inspector">
       <div className="panel-head">
         <h2>{target.symbol}</h2>
         <span className="panel-sub">{target.source === 'discover' ? 'from Discover' : 'from Watchlist'}</span>

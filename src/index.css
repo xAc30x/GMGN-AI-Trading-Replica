@@ -2992,3 +2992,83 @@ html {
   border-radius: 8px;
   background: var(--bg-card);
 }
+
+/* First-launch tour */
+.tour-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+
+.tour-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+}
+
+/* The page shows through this box; its shadow dims everything else. */
+.tour-spot {
+  position: absolute;
+  border: 2px solid var(--lime);
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.65), 0 0 18px var(--lime-glow);
+  transition: top 0.2s ease, left 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+
+.tour-card {
+  position: absolute;
+  background: var(--bg-card-2);
+  border: 1px solid var(--lime-dim);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  outline: none;
+}
+
+.tour-card-center {
+  top: 50%;
+  left: 50%;
+  width: min(380px, calc(100vw - 24px));
+  transform: translate(-50%, -50%);
+}
+
+.tour-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.tour-card h3 {
+  margin: 4px 0 6px;
+  font-size: 16px;
+  color: var(--lime);
+}
+
+.tour-card p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.tour-card .tour-hidden-note {
+  color: var(--orange);
+}
+
+.tour-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tour-actions .spacer {
+  flex: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot {
+    transition: none;
+  }
+}

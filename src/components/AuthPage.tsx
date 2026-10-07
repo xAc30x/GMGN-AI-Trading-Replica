@@ -4,8 +4,9 @@ import {
   fetchProviders,
   signIn,
   signUp,
-  startGoogleSignIn,
+  startExternalSignIn,
   type AuthUser,
+  type ExternalProvider,
   type SignInProviders,
 } from '../auth';
 
@@ -16,6 +17,11 @@ interface Props {
   /** Shown above the form, for example when the server could not be reached or the session ended. */
   notice?: string;
 }
+
+const EXTERNAL: { id: ExternalProvider; label: string }[] = [
+  { id: 'google', label: 'Google' },
+  { id: 'apple', label: 'Apple' },
+];
 
 const TABS: { id: AuthMode; label: string }[] = [
   { id: 'signin', label: 'Sign in' },
@@ -73,6 +79,7 @@ export function AuthPage({ onSignedIn, notice }: Props) {
   };
 
   const isSignUp = mode === 'signup';
+  const notSetUp = EXTERNAL.filter((p) => !providers[p.id]).map((p) => p.label);
   const verb = isSignUp ? 'Sign up' : 'Sign in';
 
   return (
@@ -162,27 +169,27 @@ export function AuthPage({ onSignedIn, notice }: Props) {
           </div>
 
           <div className="auth-providers">
-            <button
-              type="button"
-              className="btn-ghost"
-              disabled={!providers.google || busy}
-              aria-describedby={providers.google ? undefined : 'auth-providers-note'}
-              onClick={() => {
-                setBusy(true);
-                startGoogleSignIn();
-              }}
-            >
-              Continue with Google
-            </button>
-            <button type="button" className="btn-ghost" disabled aria-describedby="auth-providers-note">
-              Continue with Apple
-            </button>
+            {EXTERNAL.map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className="btn-ghost"
+                disabled={!providers[id] || busy}
+                aria-describedby={providers[id] ? undefined : 'auth-providers-note'}
+                onClick={() => {
+                  setBusy(true);
+                  startExternalSignIn(id);
+                }}
+              >
+                Continue with {label}
+              </button>
+            ))}
           </div>
-          <p id="auth-providers-note" className="auth-note">
-            {providers.google
-              ? 'Apple sign-in is not set up on this server yet.'
-              : 'Google and Apple sign-in are not set up on this server yet.'}
-          </p>
+          {notSetUp.length > 0 && (
+            <p id="auth-providers-note" className="auth-note">
+              {notSetUp.join(' and ')} sign-in {notSetUp.length > 1 ? 'are' : 'is'} not set up on this server yet.
+            </p>
+          )}
 
           {isSignUp && (
             <p className="auth-note">Sign-up is open only to email addresses the server owner has approved.</p>

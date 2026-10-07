@@ -79,19 +79,26 @@ export async function fetchProviders(): Promise<SignInProviders> {
   }
 }
 
-/** Leaves the app for Google; the server brings the browser back signed in, or with ?signin_error=. */
-export function startGoogleSignIn(): void {
-  window.location.assign('/api/auth/google/start');
+export type ExternalProvider = 'google' | 'apple';
+
+const PROVIDER_LABELS: Record<ExternalProvider, string> = { google: 'Google', apple: 'Apple' };
+
+/** Leaves the app for Google or Apple; the server brings the browser back signed in, or with ?signin_error=. */
+export function startExternalSignIn(provider: ExternalProvider): void {
+  window.location.assign(`/api/auth/${provider}/start`);
 }
 
-const SIGN_IN_ERRORS: Record<string, string> = {
-  not_configured: 'Google sign-in is not set up on this server.',
-  cancelled: 'Google sign-in was cancelled.',
-  expired: 'That sign-in attempt expired or was already used. Please try again.',
-  unverified: 'Google has not verified that email address, so it cannot be used to sign in.',
-  not_allowed: 'This Google account’s email is not approved for this app.',
-  failed: 'Google sign-in failed. Please try again.',
-};
+function signInErrorMessage(code: string, provider: string | null): string {
+  const label = provider === 'google' || provider === 'apple' ? PROVIDER_LABELS[provider] : 'Google or Apple';
+  switch (code) {
+    case 'not_configured': return `${label} sign-in is not set up on this server.`;
+    case 'cancelled': return `${label} sign-in was cancelled.`;
+    case 'expired': return 'That sign-in attempt expired or was already used. Please try again.';
+    case 'unverified': return `${label} has not verified that email address, so it cannot be used to sign in.`;
+    case 'not_allowed': return `This ${label} account’s email is not approved for this app.`;
+    default: return `${label} sign-in failed. Please try again.`;
+  }
+}
 
 let signInErrorOnLoad: string | undefined;
 
@@ -104,9 +111,10 @@ export function takeSignInError(): string {
   if (signInErrorOnLoad !== undefined) return signInErrorOnLoad;
   const url = new URL(window.location.href);
   const code = url.searchParams.get('signin_error');
-  signInErrorOnLoad = code === null ? '' : (SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.failed);
+  signInErrorOnLoad = code === null ? '' : signInErrorMessage(code, url.searchParams.get('signin_provider'));
   if (code !== null) {
     url.searchParams.delete('signin_error');
+    url.searchParams.delete('signin_provider');
     window.history.replaceState(null, '', url.pathname + url.search + url.hash);
   }
   return signInErrorOnLoad;

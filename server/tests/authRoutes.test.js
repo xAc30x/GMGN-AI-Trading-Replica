@@ -12,7 +12,7 @@ const PASSWORD = 'correct horse battery';
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 /** Starts a small app with the auth routes and one protected route. */
-async function startApp(t, { allowed = ALLOWED, production = false, google = null } = {}) {
+async function startApp(t, { allowed = ALLOWED, production = false, google = null, apple = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-auth-routes-'));
   const clock = { now: 1_000_000 };
   const settings = { allowed };
@@ -23,7 +23,7 @@ async function startApp(t, { allowed = ALLOWED, production = false, google = nul
     allowedEmails: () => parseAllowedEmails(settings.allowed),
     secureCookies: () => production,
     now: () => clock.now,
-    googleProvider: () => google,
+    externalProviders: { google: () => google, apple: () => apple },
   }));
   app.get('/api/protected', (req, res) => res.json({ ok: true, email: req.user.email }));
   const server = app.listen(0, '127.0.0.1');
@@ -44,8 +44,13 @@ async function startApp(t, { allowed = ALLOWED, production = false, google = nul
     return { status: res.status, body: await res.json(), setCookie, cookie: match?.[1] ? `${SESSION_COOKIE}=${match[1]}` : '' };
   }
   /** GET without following redirects; returns the target and every cookie set. */
-  async function visit(route, cookie) {
-    const res = await fetch(base + route, { redirect: 'manual', headers: cookie ? { cookie } : {} });
+  async function visit(route, cookie, form) {
+    const res = await fetch(base + route, {
+      redirect: 'manual',
+      method: form ? 'POST' : 'GET',
+      headers: { ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
+      body: form ? new URLSearchParams(form).toString() : undefined,
+    });
     return { status: res.status, location: res.headers.get('location'), cookies: res.headers.getSetCookie() };
   }
   return { call, visit, clock, settings };
@@ -191,16 +196,17 @@ test('the real server requires sign-in on its API routes', async (t) => {
   assert.equal((await fetch(`${base}/api/health`, { headers: { cookie } })).status, 200);
 });
 
-/** Stands in for Google: start() hands out a URL, finish() returns whatever account the test sets. */
-function fakeGoogle(account = { subject: 'google-sub-1', email: ALLOWED, emailVerified: true }) {
+/** Stands in for Google (or Apple with responseMode 'form_post'): finish() returns whatever account the test sets. */
+function fakeGoogle(account = { subject: 'google-sub-1', email: ALLOWED, emailVerified: true }, responseMode = 'query') {
   const fake = {
+    responseMode,
     account,
     finished: [],
     async start() {
       return { url: 'https://accounts.example.test/authorize?state=s1', pending: { verifier: 'v1', state: 's1', nonce: 'n1' } };
     },
-    async finish(search, pending) {
-      fake.finished.push({ search, pending });
+    async finish(response, pending) {
+      fake.finished.push({ response, pending });
       return fake.account;
     },
   };
@@ -219,6 +225,7 @@ async function googleRoundTrip(visit, query = 'code=abc&state=s1') {
 test('providers report whether Google sign-in is set up', async (t) => {
   assert.deepEqual((await (await startApp(t)).call('/api/auth/providers')).body, { ok: true, google: false, apple: false });
   assert.deepEqual((await (await startApp(t, { google: fakeGoogle() })).call('/api/auth/providers')).body, { ok: true, google: true, apple: false });
+  assert.deepEqual((await (await startApp(t, { apple: fakeGoogle() })).call('/api/auth/providers')).body, { ok: true, google: false, apple: true });
 });
 
 test('Google start sends the browser to Google with a short-lived private cookie', async (t) => {
@@ -238,7 +245,7 @@ test('Google start without a configuration returns to the page with a reason', a
   const { visit } = await startApp(t);
   const start = await visit('/api/auth/google/start');
   assert.equal(start.status, 303);
-  assert.equal(start.location, '/?signin_error=not_configured');
+  assert.equal(start.location, '/?signin_error=not_configured&signin_provider=google');
 });
 
 test('a Google callback signs in an allow-listed, verified account and can be used only once', async (t) => {
@@ -248,35 +255,35 @@ test('a Google callback signs in an allow-listed, verified account and can be us
   assert.equal(callback.status, 303);
   assert.equal(callback.location, '/');
   assert.ok(session, 'a session cookie is set');
-  assert.equal(google.finished[0].search, '?code=abc&state=s1');
+  assert.deepEqual(google.finished[0].response, { search: '?code=abc&state=s1' });
   assert.deepEqual(google.finished[0].pending.state, 's1');
   assert.deepEqual((await call('/api/auth/me', { cookie: `${SESSION_COOKIE}=${session}` })).body.user, { email: ALLOWED });
 
   const replay = await visit('/api/auth/google/callback?code=abc&state=s1', oauthCookie);
-  assert.equal(replay.location, '/?signin_error=expired');
+  assert.equal(replay.location, '/?signin_error=expired&signin_provider=google');
   assert.equal(cookieValue(replay.cookies, SESSION_COOKIE), '');
 });
 
 test('a Google callback without the start cookie, or after ten minutes, is refused', async (t) => {
   const { visit, clock } = await startApp(t, { google: fakeGoogle() });
-  assert.equal((await visit('/api/auth/google/callback?code=abc&state=s1')).location, '/?signin_error=expired');
+  assert.equal((await visit('/api/auth/google/callback?code=abc&state=s1')).location, '/?signin_error=expired&signin_provider=google');
   const start = await visit('/api/auth/google/start');
   clock.now += 10 * 60 * 1000;
   const late = await visit('/api/auth/google/callback?code=abc&state=s1', `${OAUTH_COOKIE}=${cookieValue(start.cookies, OAUTH_COOKIE)}`);
-  assert.equal(late.location, '/?signin_error=expired');
+  assert.equal(late.location, '/?signin_error=expired&signin_provider=google');
 });
 
 test('Google sign-in is refused for emails off the allow-list, unverified emails, cancels and failures', async (t) => {
   const google = fakeGoogle();
   const { visit } = await startApp(t, { google });
   google.account = { subject: 'g2', email: 'stranger@example.com', emailVerified: true };
-  assert.equal((await googleRoundTrip(visit)).callback.location, '/?signin_error=not_allowed');
+  assert.equal((await googleRoundTrip(visit)).callback.location, '/?signin_error=not_allowed&signin_provider=google');
   google.account = { subject: 'g3', email: ALLOWED, emailVerified: false };
-  assert.equal((await googleRoundTrip(visit)).callback.location, '/?signin_error=unverified');
-  assert.equal((await googleRoundTrip(visit, 'error=access_denied&state=s1')).callback.location, '/?signin_error=cancelled');
+  assert.equal((await googleRoundTrip(visit)).callback.location, '/?signin_error=unverified&signin_provider=google');
+  assert.equal((await googleRoundTrip(visit, 'error=access_denied&state=s1')).callback.location, '/?signin_error=cancelled&signin_provider=google');
   google.finish = async () => { throw new Error('token exchange failed'); };
   const failed = await googleRoundTrip(visit);
-  assert.equal(failed.callback.location, '/?signin_error=failed');
+  assert.equal(failed.callback.location, '/?signin_error=failed&signin_provider=google');
   assert.equal(failed.session, '');
 });
 
@@ -292,4 +299,36 @@ test('Google sign-in joins the existing email account instead of making a second
   assert.equal((await call('/api/auth/me', { cookie: `${SESSION_COOKIE}=${second.session}` })).body.user.email, ALLOWED);
   // Password sign-in still works for the joined account.
   assert.equal((await call('/api/auth/signin', { body: { email: ALLOWED, password: PASSWORD } })).status, 200);
+});
+
+test('Apple returns with a form POST; its start cookie must survive that cross-site POST', async (t) => {
+  const apple = fakeGoogle({ subject: 'apple-sub-1', email: ALLOWED, emailVerified: true }, 'form_post');
+  const { visit, call } = await startApp(t, { apple });
+  const start = await visit('/api/auth/apple/start');
+  assert.equal(start.status, 303);
+  const cookie = start.cookies.find(c => c.startsWith(`${OAUTH_COOKIE}=`));
+  assert.match(cookie, /SameSite=None/i);
+  assert.match(cookie, /;\s*Secure/i);
+  assert.match(cookie, /Path=\/api\/auth\/apple/);
+  const oauthCookie = `${OAUTH_COOKIE}=${cookieValue(start.cookies, OAUTH_COOKIE)}`;
+
+  const callback = await visit('/api/auth/apple/callback', oauthCookie, { code: 'abc', state: 's1' });
+  assert.equal(callback.status, 303);
+  assert.equal(callback.location, '/');
+  assert.equal(apple.finished[0].response.form.get('code'), 'abc');
+  const session = cookieValue(callback.cookies, SESSION_COOKIE);
+  assert.deepEqual((await call('/api/auth/me', { cookie: `${SESSION_COOKIE}=${session}` })).body.user, { email: ALLOWED });
+
+  const cancel = await visit('/api/auth/apple/start');
+  const cancelled = await visit('/api/auth/apple/callback', `${OAUTH_COOKIE}=${cookieValue(cancel.cookies, OAUTH_COOKIE)}`,
+    { error: 'user_cancelled_authorize', state: 's1' });
+  assert.equal(cancelled.location, '/?signin_error=cancelled&signin_provider=apple');
+});
+
+test('a sign-in started with Google cannot be finished at the Apple address', async (t) => {
+  const { visit } = await startApp(t, { google: fakeGoogle(), apple: fakeGoogle(undefined, 'form_post') });
+  const start = await visit('/api/auth/google/start');
+  const crossed = await visit('/api/auth/apple/callback', `${OAUTH_COOKIE}=${cookieValue(start.cookies, OAUTH_COOKIE)}`,
+    { code: 'abc', state: 's1' });
+  assert.equal(crossed.location, '/?signin_error=expired&signin_provider=apple');
 });

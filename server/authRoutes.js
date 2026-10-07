@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
+import express from 'express';
 import { createAuthStore, normalizeEmail, SESSION_TTL_MS } from './authStore.js';
-import { createOidcProvider, googleSettings } from './externalSignIn.js';
+import { appleSettings, createAppleProvider, createOidcProvider, googleSettings } from './externalSignIn.js';
 
 /**
  * Sign-up / sign-in / sign-out routes, and the middleware that requires a
@@ -8,9 +9,10 @@ import { createOidcProvider, googleSettings } from './externalSignIn.js';
  */
 
 export const SESSION_COOKIE = 'gmgn_session';
-/** Holds the id of a Google sign-in in progress, between leaving for Google and coming back. */
+/** Holds the id of a Google/Apple sign-in in progress, between leaving the app and coming back. */
 export const OAUTH_COOKIE = 'gmgn_oauth';
-const OAUTH_COOKIE_PATH = '/api/auth/google';
+export const EXTERNAL_PROVIDERS = ['google', 'apple'];
+const PROVIDER_LABELS = { google: 'Google', apple: 'Apple' };
 const OAUTH_PENDING_MS = 10 * 60 * 1000;
 const MAX_PENDING_OAUTH = 1_000;
 const AUTH_PREFIX = '/api/auth/';
@@ -85,7 +87,7 @@ function readCookie(req, name) {
  *   allowedEmails?: () => Set<string>,
  *   secureCookies?: () => boolean,
  *   now?: () => number,
- *   googleProvider?: () => ReturnType<typeof createOidcProvider> | null,
+ *   externalProviders?: Record<'google' | 'apple', () => ReturnType<typeof createOidcProvider> | null>,
  * }} [options]
  * @returns {import('express').RequestHandler} middleware requiring a signed-in session
  */
@@ -94,16 +96,26 @@ export function registerAuthRoutes(app, {
   allowedEmails = () => parseAllowedEmails(process.env.GMGN_ALLOWED_EMAILS),
   secureCookies = () => process.env.NODE_ENV === 'production',
   now = Date.now,
-  googleProvider = () => {
-    const settings = googleSettings();
-    return settings ? createOidcProvider(settings) : null;
+  externalProviders = {
+    google: () => {
+      const settings = googleSettings();
+      return settings ? createOidcProvider(settings) : null;
+    },
+    apple: () => {
+      const settings = appleSettings();
+      return settings ? createAppleProvider(settings) : null;
+    },
   },
 } = {}) {
   let store;
   const getStore = () => (store ??= openStore());
-  let google;
-  const getGoogle = () => (google === undefined ? (google = googleProvider()) : google);
-  /** Google sign-ins in progress, by the random id in the OAUTH_COOKIE. One process only. */
+  /** Each provider is built once, on first use; null when it is not set up. */
+  const providerCache = new Map();
+  const getProvider = (name) => {
+    if (!providerCache.has(name)) providerCache.set(name, externalProviders[name]?.() ?? null);
+    return providerCache.get(name);
+  };
+  /** Google/Apple sign-ins in progress, by the random id in the OAUTH_COOKIE. One process only. */
   const pendingOAuth = new Map();
   const emailLimiter = createAttemptLimiter({ maxFailures: MAX_FAILURES_PER_EMAIL, windowMs: LOCKOUT_WINDOW_MS, now });
   const ipLimiter = createAttemptLimiter({ maxFailures: MAX_FAILURES_PER_IP, windowMs: LOCKOUT_WINDOW_MS, now });
@@ -195,13 +207,18 @@ export function registerAuthRoutes(app, {
     res.json({ ok: true });
   });
 
-  app.get('/api/auth/providers', (_req, res) => {
+  /** Whether a provider is set up. A broken setup is logged and reported as not set up. */
+  function providerReady(name) {
     try {
-      res.json({ ok: true, google: Boolean(getGoogle()), apple: false });
+      return Boolean(getProvider(name));
     } catch (e) {
-      console.error('Sign-in provider settings are invalid:', e.message);
-      res.json({ ok: true, google: false, apple: false });
+      console.error(`${PROVIDER_LABELS[name]} sign-in settings are invalid:`, e.message);
+      return false;
     }
+  }
+
+  app.get('/api/auth/providers', (_req, res) => {
+    res.json({ ok: true, google: providerReady('google'), apple: providerReady('apple') });
   });
 
   function prunePendingOAuth() {
@@ -210,63 +227,80 @@ export function registerAuthRoutes(app, {
     while (pendingOAuth.size >= MAX_PENDING_OAUTH) pendingOAuth.delete(pendingOAuth.keys().next().value);
   }
 
-  /** Sends the browser back to the starting page with a short reason code it can explain. */
-  function failExternalSignIn(res, reason) {
-    res.clearCookie(OAUTH_COOKIE, { httpOnly: true, sameSite: 'lax', secure: secureCookies(), path: OAUTH_COOKIE_PATH });
-    res.redirect(303, `/?signin_error=${encodeURIComponent(reason)}`);
+  /**
+   * Apple returns with a cross-site form POST, which browsers only send cookies with when
+   * they are SameSite=None (and so Secure). Google returns with a normal link (Lax is enough).
+   */
+  function oauthCookieOptions(name, provider) {
+    const formPost = provider?.responseMode === 'form_post';
+    return {
+      httpOnly: true,
+      sameSite: formPost ? 'none' : 'lax',
+      secure: formPost || secureCookies(),
+      path: `/api/auth/${name}`,
+    };
   }
 
-  app.get('/api/auth/google/start', async (req, res) => {
-    let provider;
-    try {
-      provider = getGoogle();
-    } catch (e) {
-      console.error('Google sign-in settings are invalid:', e.message);
-      return failExternalSignIn(res, 'not_configured');
-    }
-    if (!provider) return failExternalSignIn(res, 'not_configured');
-    try {
-      const { url, pending } = await provider.start();
-      prunePendingOAuth();
-      const id = crypto.randomBytes(32).toString('base64url');
-      pendingOAuth.set(id, { ...pending, expiresAt: now() + OAUTH_PENDING_MS });
-      res.cookie(OAUTH_COOKIE, id, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: secureCookies(),
-        path: OAUTH_COOKIE_PATH,
-        maxAge: OAUTH_PENDING_MS,
-      });
-      res.redirect(303, url);
-    } catch (e) {
-      console.error('Google sign-in could not start:', e.message);
-      failExternalSignIn(res, 'failed');
-    }
-  });
+  /** Sends the browser back to the starting page with a short reason code it can explain. */
+  function failExternalSignIn(res, name, provider, reason) {
+    res.clearCookie(OAUTH_COOKIE, oauthCookieOptions(name, provider));
+    res.redirect(303, `/?signin_error=${encodeURIComponent(reason)}&signin_provider=${name}`);
+  }
 
-  app.get('/api/auth/google/callback', async (req, res) => {
-    const id = readCookie(req, OAUTH_COOKIE);
-    const pending = id ? pendingOAuth.get(id) : undefined;
-    if (id) pendingOAuth.delete(id); // one use only
-    if (typeof req.query.error === 'string') return failExternalSignIn(res, 'cancelled');
-    if (!pending || pending.expiresAt <= now()) return failExternalSignIn(res, 'expired');
-    try {
-      const provider = getGoogle();
-      if (!provider) return failExternalSignIn(res, 'not_configured');
-      const account = await provider.finish(new URL(req.originalUrl, 'http://placeholder').search, pending);
-      if (!account.subject || !account.email || !account.emailVerified) return failExternalSignIn(res, 'unverified');
-      const email = normalizeEmail(account.email);
-      if (!allowedEmails().has(email)) return failExternalSignIn(res, 'not_allowed');
-      const user = getStore().findOrCreateExternalUser('google', account.subject, email);
-      const { token } = getStore().createSession(user.id);
-      res.clearCookie(OAUTH_COOKIE, { httpOnly: true, sameSite: 'lax', secure: secureCookies(), path: OAUTH_COOKIE_PATH });
-      setSessionCookie(res, token);
-      res.redirect(303, '/');
-    } catch (e) {
-      console.error('Google sign-in failed:', e.message);
-      failExternalSignIn(res, 'failed');
-    }
-  });
+  for (const name of EXTERNAL_PROVIDERS) {
+    const label = PROVIDER_LABELS[name];
+
+    app.get(`/api/auth/${name}/start`, async (_req, res) => {
+      if (!providerReady(name)) return failExternalSignIn(res, name, null, 'not_configured');
+      const provider = getProvider(name);
+      try {
+        const { url, pending } = await provider.start();
+        prunePendingOAuth();
+        const id = crypto.randomBytes(32).toString('base64url');
+        pendingOAuth.set(id, { ...pending, provider: name, expiresAt: now() + OAUTH_PENDING_MS });
+        res.cookie(OAUTH_COOKIE, id, { ...oauthCookieOptions(name, provider), maxAge: OAUTH_PENDING_MS });
+        res.redirect(303, url);
+      } catch (e) {
+        console.error(`${label} sign-in could not start:`, e.message);
+        failExternalSignIn(res, name, provider, 'failed');
+      }
+    });
+
+    const callback = async (req, res) => {
+      const provider = providerReady(name) ? getProvider(name) : null;
+      const id = readCookie(req, OAUTH_COOKIE);
+      const pending = id ? pendingOAuth.get(id) : undefined;
+      if (id) pendingOAuth.delete(id); // one use only
+      const formPost = provider?.responseMode === 'form_post';
+      const response = formPost
+        ? { form: new URLSearchParams(Object.entries(req.body ?? {}).filter(([, v]) => typeof v === 'string')) }
+        : { search: new URL(req.originalUrl, 'http://placeholder').search };
+      const errorParam = formPost ? response.form.get('error') : req.query.error;
+      if (!provider) return failExternalSignIn(res, name, provider, 'not_configured');
+      if (typeof errorParam === 'string' && errorParam) return failExternalSignIn(res, name, provider, 'cancelled');
+      if (!pending || pending.provider !== name || pending.expiresAt <= now()) {
+        return failExternalSignIn(res, name, provider, 'expired');
+      }
+      try {
+        const account = await provider.finish(response, pending);
+        if (!account.subject || !account.email || !account.emailVerified) {
+          return failExternalSignIn(res, name, provider, 'unverified');
+        }
+        const email = normalizeEmail(account.email);
+        if (!allowedEmails().has(email)) return failExternalSignIn(res, name, provider, 'not_allowed');
+        const user = getStore().findOrCreateExternalUser(name, account.subject, email);
+        const { token } = getStore().createSession(user.id);
+        res.clearCookie(OAUTH_COOKIE, oauthCookieOptions(name, provider));
+        setSessionCookie(res, token);
+        res.redirect(303, '/');
+      } catch (e) {
+        console.error(`${label} sign-in failed:`, e.message);
+        failExternalSignIn(res, name, provider, 'failed');
+      }
+    };
+    app.get(`/api/auth/${name}/callback`, callback);
+    app.post(`/api/auth/${name}/callback`, express.urlencoded({ extended: false, limit: '16kb' }), callback);
+  }
 
   /** Resolves the request's session, or null. Sessions for emails removed from the allow-list are ended. */
   function currentUser(req) {

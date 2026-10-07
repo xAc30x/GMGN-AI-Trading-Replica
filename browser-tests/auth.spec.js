@@ -7,8 +7,8 @@ const PASSWORD = 'correct horse battery';
  * Fakes the sign-in API in the page. Other /api calls answer 404 so the dashboard
  * loads without a real server. Returns the requests the page sent to the auth routes.
  */
-async function installAuthFixtures(page, { signedIn = false, meStatus, google = false } = {}) {
-  const state = { signedIn, requests: [], healthStatus: 404, googleResult: 'ok' };
+async function installAuthFixtures(page, { signedIn = false, meStatus, google = false, apple = false } = {}) {
+  const state = { signedIn, requests: [], healthStatus: 404, externalResult: 'ok' };
   await page.addInitScript(() => { localStorage.setItem('gmgn.tutorial.seen.v1', 'true'); });
   await page.route('**/api/**', async route => {
     const request = route.request();
@@ -38,11 +38,12 @@ async function installAuthFixtures(page, { signedIn = false, meStatus, google = 
       state.signedIn = true;
       return route.fulfill({ status: 201, json: { ok: true, user: { email: EMAIL } } });
     }
-    if (url.pathname === '/api/auth/providers') return route.fulfill({ json: { ok: true, google, apple: false } });
-    if (url.pathname === '/api/auth/google/start') {
-      // Stands in for the whole trip to Google and back.
-      if (state.googleResult === 'ok') state.signedIn = true;
-      const location = state.googleResult === 'ok' ? '/' : `/?signin_error=${state.googleResult}`;
+    if (url.pathname === '/api/auth/providers') return route.fulfill({ json: { ok: true, google, apple } });
+    const external = url.pathname.match(/^\/api\/auth\/(google|apple)\/start$/);
+    if (external) {
+      // Stands in for the whole trip to Google or Apple and back.
+      if (state.externalResult === 'ok') state.signedIn = true;
+      const location = state.externalResult === 'ok' ? '/' : `/?signin_error=${state.externalResult}&signin_provider=${external[1]}`;
       return route.fulfill({ status: 303, headers: { location } });
     }
     if (url.pathname === '/api/auth/signout') {
@@ -164,10 +165,30 @@ test('Continue with Google signs in through the server and opens the dashboard',
 
 test('a refused Google sign-in comes back with a plain message and a clean address', async ({ page }) => {
   const state = await installAuthFixtures(page, { google: true });
-  state.googleResult = 'not_allowed';
+  state.externalResult = 'not_allowed';
   await page.goto('/');
   await page.getByRole('button', { name: 'Continue with Google' }).click();
   await expect(page.getByText('This Google account’s email is not approved for this app.')).toBeVisible();
   await expect(dashboard(page)).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe('');
+});
+
+test('Continue with Apple works the same way once Apple is set up', async ({ page }) => {
+  const state = await installAuthFixtures(page, { apple: true });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeDisabled();
+  await expect(page.getByText('Google sign-in is not set up on this server yet.')).toBeVisible();
+  await page.getByRole('button', { name: 'Continue with Apple' }).click();
+  await expect(dashboard(page)).toBeVisible();
+  expect(state.requests.some(r => r.path === '/api/auth/apple/start')).toBe(true);
+});
+
+test('a cancelled Apple sign-in names Apple in its message', async ({ page }) => {
+  const state = await installAuthFixtures(page, { google: true, apple: true });
+  state.externalResult = 'cancelled';
+  await page.goto('/');
+  await expect(page.getByText(/not set up on this server/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Continue with Apple' }).click();
+  await expect(page.getByText('Apple sign-in was cancelled.')).toBeVisible();
   expect(new URL(page.url()).search).toBe('');
 });

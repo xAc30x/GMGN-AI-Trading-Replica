@@ -40,3 +40,5 @@ test-results
 
 server/.research.sqlite*
 server/.auth.sqlite*
+# Apple sign-in keys — never commit
+*.p8

@@ -225,6 +225,9 @@ boundaries are separately reviewed and authorized.
 
 ### Private production deployment
 
+Step-by-step server setup (Ubuntu, Caddy HTTPS, systemd service, nightly backups):
+[docs/DEPLOY.md](docs/DEPLOY.md). Server config files are in `deploy/`.
+
 Build with `npm ci --ignore-scripts` and `npm run build`, then run
 `NODE_ENV=production GMGN_LIVE=0 npm run server`. The backend serves the built
 frontend and API together at http://127.0.0.1:8787. It binds only to loopback.
@@ -233,9 +236,9 @@ does not expose the source tree; unknown API routes remain 404.
 
 In production the session cookie is `Secure`, so open the app through its HTTPS
 address (the reverse proxy), not plain `http://127.0.0.1:8787`, or sign-in will not
-stick. With app sign-in in place, a separate password page in the reverse proxy is
-no longer needed; remove it once sign-in has been tested on the server. Back up
-`server/.auth.sqlite` with the other databases.
+stick. The reverse proxy has no separate password page; app sign-in protects the app.
+Back up the account database with the other databases (the nightly backup in
+`deploy/` covers it).
 
 
 ## Consolidated discovery and holdings features

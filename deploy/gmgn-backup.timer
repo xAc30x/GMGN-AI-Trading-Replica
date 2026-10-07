@@ -1,0 +1,12 @@
+# Runs the database backup every night. Install as /etc/systemd/system/gmgn-backup.timer.
+
+[Unit]
+Description=Nightly backup of the GMGN trading app databases
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

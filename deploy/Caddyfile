@@ -1,0 +1,29 @@
+# Caddy front door for the trading app. Installed as /etc/caddy/Caddyfile.
+# Caddy gets and renews the HTTPS certificate on its own once the domain points at this server.
+#
+# Replace before use:
+#   trader.example.com  -> your domain name (the same address as GMGN_PUBLIC_URL)
+#
+# There is no password prompt here: the app's own sign-in protects every page and API route,
+# with its own lockout for repeated wrong passwords, and the app token is still required.
+
+trader.example.com {
+	header {
+		# Browsers must use HTTPS for this site for the next year.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	encode zstd gzip
+
+	# The app listens on this machine only (127.0.0.1). Caddy passes the visitor's address in
+	# X-Forwarded-For, which the app trusts only because the request comes from loopback.
+	reverse_proxy 127.0.0.1:8787
+
+	# Caddy writes the Authorization and Cookie headers as REDACTED in this log.
+	log {
+		output file /var/log/caddy/gmgn-trader.log {
+			roll_keep 10
+		}
+	}
+}

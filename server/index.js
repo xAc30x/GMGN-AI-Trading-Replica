@@ -34,6 +34,9 @@ import { appleSettings, googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
+import { securityHeaders } from './securityHeaders.js';
+import { jsonErrorHandler, safeJsonResponses } from './errorSafety.js';
+import { authFailureGuard, requestRateLimit } from './rateLimit.js';
 import { assertTradeId, authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast } from './tradeLedger.js';
 import {
   finishPortfolioReservation,
@@ -105,6 +108,9 @@ const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
 const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
 const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
 const TOKEN_HEADER = 'x-gmgn-token';
+const API_REQUESTS_PER_MIN = envNumber('GMGN_API_REQUESTS_PER_MIN', 300, { min: 30, max: 10000, integer: true });
+const AUTH_FAILURES_PER_15_MIN = envNumber('GMGN_AUTH_FAILURES_PER_15_MIN', 10, { min: 1, max: 1000, integer: true });
+const authFailures = authFailureGuard({ maxFailures: AUTH_FAILURES_PER_15_MIN, windowMs: 15 * 60_000 });
 
 function loadEnvFile() {
   if (fs.existsSync(ENV_PATH)) {
@@ -164,7 +170,27 @@ function tokensEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+function isProduction() {
+  return process.env.NODE_ENV === 'production';
+}
+
+const MIN_PRODUCTION_TOKEN_LENGTH = 32;
+
+/** Production never generates or writes a token: it must come from the service's environment file. */
+export function assertProductionToken(token) {
+  if (!token) {
+    throw new Error('GMGN_LOCAL_TOKEN must be set in the environment when NODE_ENV=production');
+  }
+  if (token.length < MIN_PRODUCTION_TOKEN_LENGTH) {
+    throw new Error(`GMGN_LOCAL_TOKEN must be at least ${MIN_PRODUCTION_TOKEN_LENGTH} characters in production`);
+  }
+}
+
 function ensureLocalToken() {
+  if (isProduction()) {
+    assertProductionToken(getLocalToken());
+    return;
+  }
   if (getLocalToken()) return;
   const token = crypto.randomBytes(24).toString('base64url');
   writeEnvMerge({ GMGN_LOCAL_TOKEN: token }, { allowKeys: new Set(['GMGN_LOCAL_TOKEN']) });
@@ -236,10 +262,14 @@ function requireLocalToken(req, res, next) {
   if (!expected) {
     return res.status(503).json({ ok: false, error: 'GMGN_LOCAL_TOKEN is not configured' });
   }
+  if (authFailures.rejectIfLocked(req, res)) return;
   const hdr = req.get(TOKEN_HEADER) || '';
-  const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
-  const provided = hdr.trim() || bearer.trim();
+  // Only a Bearer value is a token. The proxy's password page makes browsers send Basic credentials.
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const provided = hdr.trim() || (bearerMatch ? bearerMatch[1].trim() : '');
   if (!tokensEqual(provided, expected)) {
+    // A missing token is not a guess (the page polls before one is entered), so only wrong ones count.
+    if (provided) authFailures.recordFailure(req);
     return res.status(401).json({ ok: false, error: 'Invalid or missing X-GMGN-Token' });
   }
   next();
@@ -517,14 +547,19 @@ function writeEnvMerge(updates, { allowKeys = CRED_ENV_KEYS } = {}) {
 }
 
 export const app = express();
+app.disable('x-powered-by');
+// Caddy (or the Vite dev proxy) connects from this machine. Read the visitor address from
+// X-Forwarded-For only for loopback requests, so remote clients cannot fake it for lockouts and limits.
+app.set('trust proxy', 'loopback');
+app.use(securityHeaders({ browserRpcUrl: process.env.VITE_SOLANA_RPC_URL }));
+app.use(safeJsonResponses());
 app.use(
   cors({
     origin: [VITE_ORIGIN, 'http://localhost:5173'],
   }),
 );
+app.use('/api', requestRateLimit({ perMinute: API_REQUESTS_PER_MIN }));
 app.use(express.json({ limit: '32kb' }));
-// Caddy (or the Vite dev proxy) connects from this machine, so trust its forwarded client IP for lockouts.
-app.set('trust proxy', 'loopback');
 
 // Sign-up/sign-in routes come first; every other /api route needs a signed-in session.
 app.use('/api', registerAuthRoutes(app));
@@ -571,6 +606,12 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.post('/api/credentials', requireLocalToken, (req, res) => {
+  if (isProduction()) {
+    return res.status(403).json({
+      ok: false,
+      error: 'Saving credentials from the browser is disabled in production. Set them in the server environment file.',
+    });
+  }
   const { walletAddress, apiKey, privateKey } = req.body || {};
   if (privateKey != null && String(privateKey).trim() !== '') {
     return res.status(400).json({
@@ -1162,6 +1203,8 @@ app.post('/api/sol/watchlist-scan', requireLocalToken, requireLiveFlag, async (r
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.resolve(__dirname, '../dist'), { dotfiles: 'deny' }));
 }
+
+app.use(jsonErrorHandler());
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   loadSecretsFile(secretsFilePath());

@@ -70,9 +70,11 @@ function unsignedSwap({ unsafe = false, sell = null } = {}) {
   return base64(transaction.serialize());
 }
 
+// Every test starts signed in; sign-in itself is covered in auth.spec.js.
 // The first-launch tour covers the page; tests start as a returning user who has already seen it,
 // except tests tagged @first-visit, which check the tour itself.
 test.beforeEach(async ({ page }, testInfo) => {
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { ok: true, user: { email: 'tester@example.com' } } }));
   if (testInfo.tags.includes('@first-visit')) return;
   await page.addInitScript(() => { localStorage.setItem('gmgn.tutorial.seen.v1', 'true'); });
 });
@@ -131,6 +133,7 @@ async function installApiFixtures(page, scenario = {}) {
   });
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
+    if (url.pathname.startsWith('/api/auth/')) return route.fallback();
     let body = {};
     try { body = route.request().postDataJSON(); } catch { /* GET request */ }
     if (url.pathname === '/api/research/automation') {

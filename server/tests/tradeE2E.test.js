@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import bs58 from 'bs58';
+import { createSignedInSession } from './authSession.js';
 import {
   Connection,
   Keypair,
@@ -119,6 +120,7 @@ process.env.GMGN_SOL_BROADCAST = '1';
 process.env.GMGN_LOCAL_TOKEN = 'controlled-e2e-token';
 process.env.GMGN_TRADE_LEDGER_PATH = path.join(ledgerDir, 'ledger.json');
 process.env.GMGN_PORTFOLIO_LEDGER_PATH = path.join(ledgerDir, 'portfolio.sqlite');
+const session = await createSignedInSession();
 const { app } = await import('../index.js');
 
 test('unsigned swap build, local RPC broadcast, and confirmation stay on controlled fixtures', async (t) => {
@@ -128,12 +130,13 @@ test('unsigned swap build, local RPC broadcast, and confirmation stay on control
     await new Promise((resolve) => appServer.close(resolve));
     await new Promise((resolve) => fixture.close(resolve));
     fs.rmSync(ledgerDir, { recursive: true, force: true });
+    session.cleanup();
   });
 
   const token = process.env.GMGN_LOCAL_TOKEN;
   const response = await fetch(`http://127.0.0.1:${appServer.address().port}/api/sol/swap-tx`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-gmgn-token': token },
+    headers: { 'content-type': 'application/json', 'x-gmgn-token': token, cookie: session.cookie },
     body: JSON.stringify({
       outputMint: mint,
       amount: 0.01,
@@ -153,7 +156,7 @@ test('unsigned swap build, local RPC broadcast, and confirmation stay on control
   transaction.sign([wallet]);
   const connection = new Connection(`http://127.0.0.1:${appServer.address().port}/api/sol/rpc`, {
     commitment: 'confirmed',
-    httpHeaders: { 'X-GMGN-Token': token, 'X-GMGN-Trade-Id': 'controlled-e2e-trade-id-1' },
+    httpHeaders: { 'X-GMGN-Token': token, 'X-GMGN-Trade-Id': 'controlled-e2e-trade-id-1', Cookie: session.cookie },
   });
   const signature = await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 0 });
   assert.equal(signature, bs58.encode(transaction.signatures[0]));

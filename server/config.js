@@ -17,7 +17,7 @@ export function envNumber(name, fallback, { min = 0, max = Infinity, integer = f
 }
 
 /** Keys the optional secrets file may set. GMGN_PRIVATE_KEY is never loaded: this server does not sign. */
-const SECRETS_FILE_KEYS = ['GMGN_API_KEY', 'GMGN_WALLET_ADDRESS'];
+const SECRETS_FILE_KEYS = ['GMGN_API_KEY', 'GMGN_WALLET_ADDRESS', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
 
 /**
  * Location of the optional secrets file: GMGN_SECRETS_PATH when set, otherwise
@@ -34,7 +34,7 @@ export function secretsFilePath(env = process.env, home = os.homedir()) {
 }
 
 /**
- * Copy GMGN_API_KEY and GMGN_WALLET_ADDRESS from the secrets file's "card" object into env,
+ * Copy SECRETS_FILE_KEYS from the secrets file's "card" object into env,
  * without overriding values already set. A missing file is normal. An unreadable or malformed
  * file is skipped with a warning that names the path only, never the file's contents.
  */

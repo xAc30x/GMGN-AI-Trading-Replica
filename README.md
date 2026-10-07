@@ -17,7 +17,7 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 
 1. `GMGN_LIVE=1` required for `/api/sol/*` and legacy quote routes; this does not enable broadcast
 2. `GMGN_SOL_BROADCAST=1` is a separate, default-off opt-in required to forward Solana `sendTransaction`
-3. `X-GMGN-Token` required (from `GMGN_LOCAL_TOKEN` in `server/.env`)
+3. Every `/api` route except sign-in needs a signed-in account (see **Sign-in**), and `X-GMGN-Token` (from `GMGN_LOCAL_TOKEN` in `server/.env`) is still required on top for credentials and LIVE routes
 4. Spend cap: `GMGN_MAX_NATIVE_AMOUNT` (default **0.05 SOL**)
 5. Aggregate tracked exposure cap: `GMGN_MAX_PORTFOLIO_SOL` (default **0.1 SOL**) and `GMGN_MAX_OPEN_POSITIONS` (default **5**)
 6. Slippage ceiling: `GMGN_MAX_SLIPPAGE_BPS` (default **300** = 3%)
@@ -38,11 +38,12 @@ unset GMGN_LIVE GMGN_SOL_BROADCAST
 npm run dev:all
 ```
 
-Open http://127.0.0.1:5173/
+Open http://localhost:5173/ (or http://127.0.0.1:5173/; Google sign-in needs `localhost`)
 
-1. Paste `GMGN_LOCAL_TOKEN` from `server/.env` into **Credentials**
-2. Connect **Phantom** or **Solflare**
-3. Keep both execution gates unset. LIVE/PAPER service routes remain disabled in this setup.
+1. Sign up with an email on your allow-list (see **Sign-in** below)
+2. Paste `GMGN_LOCAL_TOKEN` from `server/.env` into **Credentials**
+3. Connect **Phantom** or **Solflare**
+4. Keep both execution gates unset. LIVE/PAPER service routes remain disabled in this setup.
    Automated tests use isolated loopback fixtures that never submit a real trade.
 
 Optional secrets file: the server reads `GMGN_API_KEY` and `GMGN_WALLET_ADDRESS` from
@@ -78,6 +79,42 @@ If both providers are unavailable or return invalid data, LIVE fails closed (exc
 | POST | `/api/sol/watchlist-scan` | Batch mint-safety for up to 8 watchlist mints |
 | POST | `/api/sol/swap-tx` | Unsigned buy (SOL→mint); mint safety + impact gate |
 | POST | `/api/sol/close-tx` | Unsigned sell (mint→SOL); wallet signs |
+
+## Sign-in
+
+The app opens on a sign-in page. The dashboard and every `/api` route (except the sign-in
+routes themselves) need a signed-in account. All accounts share the same dashboard and portfolio.
+
+**Who can sign up:** only emails listed in `GMGN_ALLOWED_EMAILS` (comma-separated) in `server/.env`.
+An empty list means nobody can sign up or sign in. Removing an email ends that account's access
+on its next request. The server prints how many emails are on the list when it starts.
+
+```
+GMGN_ALLOWED_EMAILS=you@example.com
+```
+
+**Email and password:** passwords need at least 12 characters and are stored only as salted scrypt
+hashes in `server/.auth.sqlite` (owner-only file, git-ignored; set `GMGN_AUTH_DB_PATH` to move it,
+and include it in backups). There is no "forgot password" or email verification yet.
+
+**Sessions:** a random session id in an `HttpOnly`, `SameSite=Lax` cookie (also `Secure` when
+`NODE_ENV=production`), valid for 7 days; only its hash is stored. Sign out from **Settings**.
+After 5 wrong passwords for one email, or 20 failed attempts from one address, sign-in is blocked
+for 15 minutes. These counters reset when the server restarts.
+
+**Google and Apple (optional):** each button is off until its settings are present. A partial
+setup stops the server at start with a message naming what is missing. Only emails the provider
+has verified and that are on the allow-list can sign in; an existing account with the same email
+is joined, not duplicated.
+
+| Setting | Used for |
+|---|---|
+| `GMGN_PUBLIC_URL` | The address you open the app at, e.g. `http://localhost:5173` or `https://trader.example.com` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google (redirect URI: `<GMGN_PUBLIC_URL>/api/auth/google/callback`) |
+| `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY_PATH` | Apple (return URL: `<GMGN_PUBLIC_URL>/api/auth/apple/callback`; https only, never localhost) |
+
+The Google values may also go in the secrets file's `"card"` (see **Run**). Keep Apple's `.p8` key
+in `~/.config/gmgn-trader/` with `chmod 600`; `*.p8` files are git-ignored.
 
 ## Still not “fully safe”
 
@@ -193,6 +230,12 @@ Build with `npm ci --ignore-scripts` and `npm run build`, then run
 frontend and API together at http://127.0.0.1:8787. It binds only to loopback.
 Keep LIVE disabled until separately authorized and validated. Production serving
 does not expose the source tree; unknown API routes remain 404.
+
+In production the session cookie is `Secure`, so open the app through its HTTPS
+address (the reverse proxy), not plain `http://127.0.0.1:8787`, or sign-in will not
+stick. With app sign-in in place, a separate password page in the reverse proxy is
+no longer needed; remove it once sign-in has been tested on the server. Back up
+`server/.auth.sqlite` with the other databases.
 
 
 ## Consolidated discovery and holdings features

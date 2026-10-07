@@ -12,15 +12,16 @@ const PASSWORD = 'correct horse battery';
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 /** Starts a small app with the auth routes and one protected route. */
-async function startApp(t, { allowed = ALLOWED, production = false, google = null, apple = null } = {}) {
+async function startApp(t, { allowed = ALLOWED, signupOpen = true, production = false, google = null, apple = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-auth-routes-'));
   const clock = { now: 1_000_000 };
-  const settings = { allowed };
+  const settings = { allowed, signupOpen };
   const app = express();
   app.use(express.json());
   app.use('/api', registerAuthRoutes(app, {
     openStore: () => createAuthStore({ file: path.join(dir, 'auth.sqlite'), now: () => clock.now }),
     allowedEmails: () => parseAllowedEmails(settings.allowed),
+    signupOpen: () => settings.signupOpen,
     secureCookies: () => production,
     now: () => clock.now,
     externalProviders: { google: () => google, apple: () => apple },
@@ -61,6 +62,58 @@ test('parseAllowedEmails normalizes entries and rejects malformed ones', () => {
   assert.equal(parseAllowedEmails(undefined).size, 0);
   assert.equal(parseAllowedEmails('').size, 0);
   assert.throws(() => parseAllowedEmails('a@example.com, not-an-email'), /GMGN_ALLOWED_EMAILS/);
+});
+
+test('sign-up is refused while it is closed, and existing accounts can still sign in', async (t) => {
+  const { call, settings } = await startApp(t);
+  assert.equal((await call('/api/auth/signup', { body: { email: ALLOWED, password: PASSWORD } })).status, 201);
+
+  settings.signupOpen = false;
+  const other = 'second@example.com';
+  settings.allowed = `${ALLOWED},${other}`;
+  const closed = await call('/api/auth/signup', { body: { email: other, password: PASSWORD } });
+  assert.equal(closed.status, 403);
+  assert.equal(closed.body.code, 'SIGNUP_CLOSED');
+  assert.equal(closed.cookie, '');
+  // The refused sign-up created no account, so signing in with it fails.
+  assert.equal((await call('/api/auth/signin', { body: { email: other, password: PASSWORD } })).status, 401);
+
+  const signedIn = await call('/api/auth/signin', { body: { email: ALLOWED, password: PASSWORD } });
+  assert.equal(signedIn.status, 200);
+  assert.notEqual(signedIn.cookie, '');
+});
+
+test('sign-up is closed unless GMGN_SIGNUP_OPEN is exactly 1', async (t) => {
+  const saved = process.env.GMGN_SIGNUP_OPEN;
+  t.after(() => {
+    if (saved === undefined) delete process.env.GMGN_SIGNUP_OPEN;
+    else process.env.GMGN_SIGNUP_OPEN = saved;
+  });
+  const app = express();
+  app.use(express.json());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-auth-signup-env-'));
+  app.use('/api', registerAuthRoutes(app, {
+    openStore: () => createAuthStore({ file: path.join(dir, 'auth.sqlite') }),
+    allowedEmails: () => parseAllowedEmails(ALLOWED),
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const signup = () => fetch(`http://127.0.0.1:${server.address().port}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: ALLOWED, password: PASSWORD }),
+  });
+  for (const value of [undefined, '', '0', 'true', 'yes']) {
+    if (value === undefined) delete process.env.GMGN_SIGNUP_OPEN;
+    else process.env.GMGN_SIGNUP_OPEN = value;
+    assert.equal((await signup()).status, 403, `GMGN_SIGNUP_OPEN=${value}`);
+  }
+  process.env.GMGN_SIGNUP_OPEN = '1';
+  assert.equal((await signup()).status, 201);
 });
 
 test('sign-up is limited to allow-listed emails and starts a session', async (t) => {
@@ -168,17 +221,18 @@ test('sessions expire after seven days', async (t) => {
 });
 
 test('the real server requires sign-in on its API routes', async (t) => {
-  const old = { db: process.env.GMGN_AUTH_DB_PATH, allowed: process.env.GMGN_ALLOWED_EMAILS };
+  const old = { db: process.env.GMGN_AUTH_DB_PATH, allowed: process.env.GMGN_ALLOWED_EMAILS, signup: process.env.GMGN_SIGNUP_OPEN };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-auth-real-'));
   process.env.GMGN_AUTH_DB_PATH = path.join(dir, 'auth.sqlite');
   process.env.GMGN_ALLOWED_EMAILS = ALLOWED;
+  delete process.env.GMGN_SIGNUP_OPEN;
   const { app } = await import('../index.js');
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
-    for (const [key, value] of [['GMGN_AUTH_DB_PATH', old.db], ['GMGN_ALLOWED_EMAILS', old.allowed]]) {
+    for (const [key, value] of [['GMGN_AUTH_DB_PATH', old.db], ['GMGN_ALLOWED_EMAILS', old.allowed], ['GMGN_SIGNUP_OPEN', old.signup]]) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   });
@@ -186,11 +240,15 @@ test('the real server requires sign-in on its API routes', async (t) => {
   for (const route of ['/api/health', '/api/research/scans', '/api/paper/portfolio']) {
     assert.equal((await fetch(base + route)).status, 401, route);
   }
-  const signup = await fetch(`${base}/api/auth/signup`, {
+  const signUp = () => fetch(`${base}/api/auth/signup`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: ALLOWED, password: PASSWORD }),
   });
+  // The real server keeps sign-up closed until GMGN_SIGNUP_OPEN=1.
+  assert.equal((await signUp()).status, 403);
+  process.env.GMGN_SIGNUP_OPEN = '1';
+  const signup = await signUp();
   assert.equal(signup.status, 201);
   const cookie = signup.headers.get('set-cookie').split(';')[0];
   assert.equal((await fetch(`${base}/api/health`, { headers: { cookie } })).status, 200);

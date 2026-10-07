@@ -62,3 +62,52 @@ export function noteSignInRequired(status: number, body: unknown): void {
     window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   }
 }
+
+export interface SignInProviders {
+  google: boolean;
+  apple: boolean;
+}
+
+/** Which outside sign-in options the server has set up. Treats any failure as "none". */
+export async function fetchProviders(): Promise<SignInProviders> {
+  try {
+    const { status, data } = await authFetch('/api/auth/providers');
+    const d = data as Partial<SignInProviders>;
+    return status === 200 ? { google: d.google === true, apple: d.apple === true } : { google: false, apple: false };
+  } catch {
+    return { google: false, apple: false };
+  }
+}
+
+/** Leaves the app for Google; the server brings the browser back signed in, or with ?signin_error=. */
+export function startGoogleSignIn(): void {
+  window.location.assign('/api/auth/google/start');
+}
+
+const SIGN_IN_ERRORS: Record<string, string> = {
+  not_configured: 'Google sign-in is not set up on this server.',
+  cancelled: 'Google sign-in was cancelled.',
+  expired: 'That sign-in attempt expired or was already used. Please try again.',
+  unverified: 'Google has not verified that email address, so it cannot be used to sign in.',
+  not_allowed: 'This Google account’s email is not approved for this app.',
+  failed: 'Google sign-in failed. Please try again.',
+};
+
+let signInErrorOnLoad: string | undefined;
+
+/**
+ * The reason the server put in ?signin_error= after an outside sign-in, as a message
+ * to show (or ''). Read once per page load, then removed from the address bar; later
+ * calls return the same answer (React may run start-up effects twice in development).
+ */
+export function takeSignInError(): string {
+  if (signInErrorOnLoad !== undefined) return signInErrorOnLoad;
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get('signin_error');
+  signInErrorOnLoad = code === null ? '' : (SIGN_IN_ERRORS[code] ?? SIGN_IN_ERRORS.failed);
+  if (code !== null) {
+    url.searchParams.delete('signin_error');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+  return signInErrorOnLoad;
+}

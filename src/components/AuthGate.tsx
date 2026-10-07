@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { SIGNED_OUT_EVENT, fetchCurrentUser, signOut, type AuthUser } from '../auth';
+import { SIGNED_OUT_EVENT, fetchCurrentUser, signOut, takeSignInError, type AuthUser } from '../auth';
 import { AuthPage } from './AuthPage';
 
 export interface Account {
@@ -18,9 +18,10 @@ export function AuthGate({ children }: { children: (account: Account) => ReactNo
 
   useEffect(() => {
     let cancelled = false;
+    const signInError = takeSignInError();
     fetchCurrentUser()
       .then((user) => {
-        if (!cancelled) setState(user ? { kind: 'signed-in', user } : { kind: 'signed-out' });
+        if (!cancelled) setState(user ? { kind: 'signed-in', user } : { kind: 'signed-out', notice: signInError || undefined });
       })
       .catch(() => {
         if (!cancelled) setState({ kind: 'signed-out', notice: 'Could not reach the server. Check that it is running, then try again.' });

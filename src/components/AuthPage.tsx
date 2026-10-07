@@ -1,5 +1,13 @@
-import { useState, type FormEvent } from 'react';
-import { PASSWORD_MIN_LENGTH, signIn, signUp, type AuthUser } from '../auth';
+import { useEffect, useState, type FormEvent } from 'react';
+import {
+  PASSWORD_MIN_LENGTH,
+  fetchProviders,
+  signIn,
+  signUp,
+  startGoogleSignIn,
+  type AuthUser,
+  type SignInProviders,
+} from '../auth';
 
 type AuthMode = 'signin' | 'signup';
 
@@ -22,6 +30,17 @@ export function AuthPage({ onSignedIn, notice }: Props) {
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [providers, setProviders] = useState<SignInProviders>({ google: false, apple: false });
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchProviders().then((p) => {
+      if (!cancelled) setProviders(p);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const switchMode = (next: AuthMode) => {
     setMode(next);
@@ -143,7 +162,16 @@ export function AuthPage({ onSignedIn, notice }: Props) {
           </div>
 
           <div className="auth-providers">
-            <button type="button" className="btn-ghost" disabled aria-describedby="auth-providers-note">
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={!providers.google || busy}
+              aria-describedby={providers.google ? undefined : 'auth-providers-note'}
+              onClick={() => {
+                setBusy(true);
+                startGoogleSignIn();
+              }}
+            >
               Continue with Google
             </button>
             <button type="button" className="btn-ghost" disabled aria-describedby="auth-providers-note">
@@ -151,7 +179,9 @@ export function AuthPage({ onSignedIn, notice }: Props) {
             </button>
           </div>
           <p id="auth-providers-note" className="auth-note">
-            Google and Apple sign-in are not set up on this server yet.
+            {providers.google
+              ? 'Apple sign-in is not set up on this server yet.'
+              : 'Google and Apple sign-in are not set up on this server yet.'}
           </p>
 
           {isSignUp && (

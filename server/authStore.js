@@ -110,6 +110,13 @@ function openDatabase(file) {
       expires_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS identities (
+      provider TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (provider, subject)
+    );
   `);
   return db;
 }
@@ -135,6 +142,13 @@ export function createAuthStore({ file = authStorePath(), now = Date.now } = {})
   `);
   const removeSession = db.prepare('DELETE FROM sessions WHERE token_hash = ?');
   const removeExpiredSessions = db.prepare('DELETE FROM sessions WHERE expires_at <= ?');
+  const findIdentity = db.prepare(`
+    SELECT u.id, u.email FROM identities i JOIN users u ON u.id = i.user_id
+    WHERE i.provider = ? AND i.subject = ?
+  `);
+  const insertIdentity = db.prepare(
+    'INSERT INTO identities (provider, subject, user_id, created_at) VALUES (?, ?, ?, ?)',
+  );
 
   return {
     /** Creates an email + password user. Throws 409 EMAIL_TAKEN if the email exists. */
@@ -165,6 +179,31 @@ export function createAuthStore({ file = authStorePath(), now = Date.now } = {})
       if (typeof password !== 'string' || password.length > PASSWORD_MAX_LENGTH) return null;
       const ok = await verifyPasswordHash(password, user?.password_hash ?? (await dummyHash));
       return ok && user?.password_hash ? { id: Number(user.id), email: user.email } : null;
+    },
+
+    /**
+     * Returns the user linked to a Google/Apple account, creating or linking one on first use.
+     * Only call with an email the provider has verified: an existing account with the same
+     * email is linked to this provider account.
+     */
+    findOrCreateExternalUser(provider, subject, rawEmail) {
+      if (typeof provider !== 'string' || !provider || typeof subject !== 'string' || !subject || subject.length > 255) {
+        throw httpError(400, 'Invalid sign-in provider account', 'INVALID_IDENTITY');
+      }
+      const linked = findIdentity.get(provider, subject);
+      if (linked) return { id: Number(linked.id), email: linked.email };
+      const email = normalizeEmail(rawEmail);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const existing = findUserByEmail.get(email);
+        const id = existing ? Number(existing.id) : Number(insertUser.run(email, null, now()).lastInsertRowid);
+        insertIdentity.run(provider, subject, id, now());
+        db.exec('COMMIT');
+        return { id, email };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
 
     /** Starts a session. Returns the raw token for the cookie; only its hash is stored. */

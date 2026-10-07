@@ -7,8 +7,8 @@ const PASSWORD = 'correct horse battery';
  * Fakes the sign-in API in the page. Other /api calls answer 404 so the dashboard
  * loads without a real server. Returns the requests the page sent to the auth routes.
  */
-async function installAuthFixtures(page, { signedIn = false, meStatus } = {}) {
-  const state = { signedIn, requests: [], healthStatus: 404 };
+async function installAuthFixtures(page, { signedIn = false, meStatus, google = false } = {}) {
+  const state = { signedIn, requests: [], healthStatus: 404, googleResult: 'ok' };
   await page.addInitScript(() => { localStorage.setItem('gmgn.tutorial.seen.v1', 'true'); });
   await page.route('**/api/**', async route => {
     const request = route.request();
@@ -37,6 +37,13 @@ async function installAuthFixtures(page, { signedIn = false, meStatus } = {}) {
       }
       state.signedIn = true;
       return route.fulfill({ status: 201, json: { ok: true, user: { email: EMAIL } } });
+    }
+    if (url.pathname === '/api/auth/providers') return route.fulfill({ json: { ok: true, google, apple: false } });
+    if (url.pathname === '/api/auth/google/start') {
+      // Stands in for the whole trip to Google and back.
+      if (state.googleResult === 'ok') state.signedIn = true;
+      const location = state.googleResult === 'ok' ? '/' : `/?signin_error=${state.googleResult}`;
+      return route.fulfill({ status: 303, headers: { location } });
     }
     if (url.pathname === '/api/auth/signout') {
       state.signedIn = false;
@@ -135,4 +142,32 @@ test('a server that cannot be reached shows a note instead of the dashboard', as
   await page.goto('/');
   await expect(page.getByText(/Could not reach the server/)).toBeVisible();
   await expect(dashboard(page)).toHaveCount(0);
+});
+
+test('Continue with Google is off until the server has Google set up', async ({ page }) => {
+  await installAuthFixtures(page);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeDisabled();
+  await expect(page.getByText('Google and Apple sign-in are not set up on this server yet.')).toBeVisible();
+});
+
+test('Continue with Google signs in through the server and opens the dashboard', async ({ page }) => {
+  const state = await installAuthFixtures(page, { google: true });
+  await page.goto('/');
+  const button = page.getByRole('button', { name: 'Continue with Google' });
+  await expect(button).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+  await button.click();
+  await expect(dashboard(page)).toBeVisible();
+  expect(state.requests.some(r => r.path === '/api/auth/google/start')).toBe(true);
+});
+
+test('a refused Google sign-in comes back with a plain message and a clean address', async ({ page }) => {
+  const state = await installAuthFixtures(page, { google: true });
+  state.googleResult = 'not_allowed';
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Continue with Google' }).click();
+  await expect(page.getByText('This Google account’s email is not approved for this app.')).toBeVisible();
+  await expect(dashboard(page)).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe('');
 });

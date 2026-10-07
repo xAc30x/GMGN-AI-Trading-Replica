@@ -30,6 +30,7 @@ import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
 import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
+import { googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
@@ -1169,6 +1170,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   ensureLocalToken();
   // Fail fast on a malformed allow-list instead of on the first sign-in.
   const allowedCount = parseAllowedEmails(process.env.GMGN_ALLOWED_EMAILS).size;
+  const googleRedirect = googleSettings()?.redirectUri;
   startResearchMonitor();
   // Express 5 hands listen errors (such as a busy port) to this callback instead of throwing.
   app.listen(PORT, '127.0.0.1', (error) => {
@@ -1186,6 +1188,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(allowedCount
       ? `Sign-in allow-list: ${allowedCount} email(s)`
       : 'Sign-in allow-list is empty: nobody can sign up or sign in. Set GMGN_ALLOWED_EMAILS in server/.env.');
+    console.log(googleRedirect ? `Google sign-in: on (redirect URI ${googleRedirect})` : 'Google sign-in: off');
     const c = credStatus();
     console.log(
       `Credentials: apiKey=${c.apiKey} wallet=${c.wallet} (${c.walletAddressMasked || 'none'}) serverSigning=disabled`,

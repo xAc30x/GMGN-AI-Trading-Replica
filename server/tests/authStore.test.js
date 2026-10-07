@@ -99,3 +99,20 @@ test('session tokens are stored only as hashes', async (t) => {
   const { token } = store.createSession(user.id);
   assert.ok(!fs.readFileSync(file).includes(token));
 });
+
+test('external accounts create a password-less user once, then return the same user', async (t) => {
+  const { store } = tempStore(t);
+  const created = store.findOrCreateExternalUser('google', 'sub-1', 'New@Example.com');
+  assert.deepEqual(created, { id: created.id, email: 'new@example.com' });
+  assert.deepEqual(store.findOrCreateExternalUser('google', 'sub-1', 'other@example.com'), created);
+  assert.equal(await store.checkPassword('new@example.com', PASSWORD), null, 'no password was ever set');
+  await assert.rejects(store.createUser('new@example.com', PASSWORD), { code: 'EMAIL_TAKEN' });
+  assert.throws(() => store.findOrCreateExternalUser('google', '', 'x@example.com'), { code: 'INVALID_IDENTITY' });
+});
+
+test('an external account with the same email joins the existing user', async (t) => {
+  const { store } = tempStore(t);
+  const user = await store.createUser('bailey@example.com', PASSWORD);
+  assert.deepEqual(store.findOrCreateExternalUser('google', 'sub-9', 'Bailey@example.com'), user);
+  assert.deepEqual(await store.checkPassword('bailey@example.com', PASSWORD), user);
+});

@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import bs58 from 'bs58';
+import { createSignedInSession } from './authSession.js';
 import { authorizeBroadcast } from '../tradeLedger.js';
 import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 let app;
+
+const session = await createSignedInSession();
+after(() => session.cleanup());
 
 const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
 const sol = 'So11111111111111111111111111111111111111112';
@@ -95,7 +99,7 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   t.after(() => new Promise(resolve => server.close(resolve)));
   const request = (path, body, token='test-only-local-token') => new Promise((resolve,reject) => {
     const req=http.request({ hostname:'127.0.0.1',port:server.address().port,path,method:'POST',
-      headers:{ 'content-type':'application/json','x-gmgn-token':token } },res => {
+      headers:{ 'content-type':'application/json','x-gmgn-token':token,cookie:session.cookie } },res => {
       let data='';res.on('data',chunk => data+=chunk);
       res.on('end',()=>resolve({ status:res.statusCode,body:JSON.parse(data) }));
     });
@@ -195,7 +199,7 @@ test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation'
   const request = (body, token='rpc-test-token', tradeId) => new Promise((resolve, reject) => {
     const req = http.request({ hostname:'127.0.0.1', port:server.address().port,
       path:'/api/sol/rpc', method:'POST',
-      headers:{ 'content-type':'application/json', 'x-gmgn-token':token,
+      headers:{ 'content-type':'application/json', 'x-gmgn-token':token, cookie:session.cookie,
         ...(tradeId ? { 'x-gmgn-trade-id':tradeId } : {}) } }, res => {
         res.resume(); res.on('end', () => resolve(res.statusCode));
       });

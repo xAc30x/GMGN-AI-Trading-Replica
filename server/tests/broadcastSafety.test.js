@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, beforeEach, describe, mock, test } from 'node:test';
 import bs58 from 'bs58';
+import { createSignedInSession } from './authSession.js';
 import { Keypair, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 
 // These are acceptance tests, not expected-failure snapshots. On an unsafe
@@ -56,7 +57,7 @@ const close = server => new Promise(resolve => {
 });
 
 describe('broadcast-boundary safety acceptance — isolated fixtures only', { concurrency: false }, () => {
-  let directory, fixture, application, wallet, tradeId, sequence = 0;
+  let directory, fixture, application, session, wallet, tradeId, sequence = 0;
   let blockHeight = 1, responseKind = 'normal';
   let sends = [], fixtureErrors = [], deniedConnections = [], loseNextResponse = false;
   const savedEnv = new Map();
@@ -167,6 +168,7 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
       GMGN_PORTFOLIO_LEGACY_PATH: path.join(directory, 'no-legacy.json'),
     })) setEnv(key, value);
     // Import does not run the executable startup path or its background workers.
+    session = await createSignedInSession();
     const { app } = await import('../index.js');
     application = http.createServer(app);
     await listen(application);
@@ -191,6 +193,7 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
   after(async () => {
     await close(application);
     await close(fixture);
+    session?.cleanup();
     mock.restoreAll();
     for (const [key, value] of savedEnv) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -204,7 +207,7 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     return new Promise((resolve, reject) => {
       const req = http.request({ hostname: '127.0.0.1', port: application.address().port,
         path: route, method: 'POST', headers: { 'content-type': 'application/json',
-          'x-gmgn-token': token, 'x-gmgn-trade-id': id } }, res => {
+          'x-gmgn-token': token, 'x-gmgn-trade-id': id, cookie: session.cookie } }, res => {
         let data = '';
         res.on('data', chunk => { data += chunk; });
         res.on('end', () => {

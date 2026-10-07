@@ -29,6 +29,7 @@ import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
+import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
@@ -521,6 +522,11 @@ app.use(
   }),
 );
 app.use(express.json({ limit: '32kb' }));
+// Caddy (or the Vite dev proxy) connects from this machine, so trust its forwarded client IP for lockouts.
+app.set('trust proxy', 'loopback');
+
+// Sign-up/sign-in routes come first; every other /api route needs a signed-in session.
+app.use('/api', registerAuthRoutes(app));
 
 app.get('/api/health', async (_req, res) => {
   const installed = cliInstalled();
@@ -1161,6 +1167,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   loadEnvFile();
   stripPersistedPrivateKey();
   ensureLocalToken();
+  // Fail fast on a malformed allow-list instead of on the first sign-in.
+  const allowedCount = parseAllowedEmails(process.env.GMGN_ALLOWED_EMAILS).size;
   startResearchMonitor();
   // Express 5 hands listen errors (such as a busy port) to this callback instead of throwing.
   app.listen(PORT, '127.0.0.1', (error) => {
@@ -1175,6 +1183,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(
       `LIVE=${liveEnabled() ? 'on' : 'off'} maxNative=${getMaxNativeAmount()} token=${getLocalToken() ? 'set' : 'missing'}`,
     );
+    console.log(allowedCount
+      ? `Sign-in allow-list: ${allowedCount} email(s)`
+      : 'Sign-in allow-list is empty: nobody can sign up or sign in. Set GMGN_ALLOWED_EMAILS in server/.env.');
     const c = credStatus();
     console.log(
       `Credentials: apiKey=${c.apiKey} wallet=${c.wallet} (${c.walletAddressMasked || 'none'}) serverSigning=disabled`,

@@ -48,5 +48,8 @@
   },
   "engines": {
     "node": ">=22.13.0"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0"
   }
 }

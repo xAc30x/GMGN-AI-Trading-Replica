@@ -2,18 +2,12 @@
 # Caddy gets and renews the HTTPS certificate on its own once the domain points at this server.
 #
 # Replace before use:
-#   trader.example.com  -> your domain name
-#   bailey              -> the user name you want to type at the password prompt
-#   PASSWORD_HASH       -> the output of: caddy hash-password
+#   trader.example.com  -> your domain name (the same address as GMGN_PUBLIC_URL)
 #
-# The password is never stored in plain text; only its bcrypt hash goes in this file.
+# There is no password prompt here: the app's own sign-in protects every page and API route,
+# with its own lockout for repeated wrong passwords, and the app token is still required.
 
 trader.example.com {
-	# First lock: a password prompt before anything else is reachable.
-	basic_auth {
-		bailey PASSWORD_HASH
-	}
-
 	header {
 		# Browsers must use HTTPS for this site for the next year.
 		Strict-Transport-Security "max-age=31536000"
@@ -26,7 +20,7 @@ trader.example.com {
 	# X-Forwarded-For, which the app trusts only because the request comes from loopback.
 	reverse_proxy 127.0.0.1:8787
 
-	# Caddy writes the Authorization header as REDACTED in this log.
+	# Caddy writes the Authorization and Cookie headers as REDACTED in this log.
 	log {
 		output file /var/log/caddy/gmgn-trader.log {
 			roll_keep 10

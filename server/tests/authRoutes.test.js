@@ -238,7 +238,9 @@ test('Google start sends the browser to Google with a short-lived private cookie
   assert.match(cookie, /SameSite=Lax/i);
   assert.match(cookie, /Path=\/api\/auth\/google/);
   assert.match(cookie, /Max-Age=600/);
-  assert.doesNotMatch(cookie, /v1|s1|n1/, 'the cookie holds only a random id, not the PKCE or state values');
+  // The id is random base64url, so check the whole value: a substring check fails by chance when the id contains "s1".
+  const id = cookie.slice(`${OAUTH_COOKIE}=`.length).split(';')[0];
+  assert.match(id, /^[A-Za-z0-9_-]{43}$/, 'the cookie holds only a random id, not the PKCE or state values');
 });
 
 test('Google start without a configuration returns to the page with a reason', async (t) => {

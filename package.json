@@ -29,6 +29,7 @@
     "dotenv": "^18.0.1",
     "express": "^5.2.1",
     "gmgn-cli": "^1.6.6",
+    "openid-client": "^6.8.8",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -47,5 +48,8 @@
   },
   "engines": {
     "node": ">=22.13.0"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0"
   }
 }

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Connection } from '@solana/web3.js';
+import { createSignedInSession } from './authSession.js';
 import { solanaAddresses, summarizePairs, usdPricesFromPairs } from '../discovery.js';
 
 const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -31,6 +32,8 @@ test('market routes enforce auth/service gate, bound requests, screen discoverie
   process.env.GMGN_LOCAL_TOKEN = 'market-test-token';
   process.env.GMGN_LIVE = '0';
   process.env.GMGN_PNL_QUOTES_PER_MIN = '1';
+  const session = await createSignedInSession();
+  t.after(() => session.cleanup());
   const { app } = await import('../index.js');
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
@@ -67,7 +70,7 @@ test('market routes enforce auth/service gate, bound requests, screen discoverie
   });
   const request = (path, body, token = 'market-test-token') => new Promise((resolve, reject) => {
     const req = http.request({ hostname: '127.0.0.1', port: server.address().port, path,
-      method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', 'x-gmgn-token': token } }, res => {
+      method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', 'x-gmgn-token': token, cookie: session.cookie } }, res => {
       let data = ''; res.on('data', chunk => data += chunk);
       res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
     });

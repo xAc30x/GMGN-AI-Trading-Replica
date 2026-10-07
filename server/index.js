@@ -29,6 +29,8 @@ import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
+import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
+import { appleSettings, googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
 import { marketSnapshots } from './discovery.js';
 import { recordScan } from './researchStore.js';
@@ -558,6 +560,11 @@ app.use(
 );
 app.use('/api', requestRateLimit({ perMinute: API_REQUESTS_PER_MIN }));
 app.use(express.json({ limit: '32kb' }));
+// Caddy (or the Vite dev proxy) connects from this machine, so trust its forwarded client IP for lockouts.
+app.set('trust proxy', 'loopback');
+
+// Sign-up/sign-in routes come first; every other /api route needs a signed-in session.
+app.use('/api', registerAuthRoutes(app));
 
 app.get('/api/health', async (_req, res) => {
   const installed = cliInstalled();
@@ -1206,13 +1213,29 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   loadEnvFile();
   stripPersistedPrivateKey();
   ensureLocalToken();
+  // Fail fast on a malformed allow-list instead of on the first sign-in.
+  const allowedCount = parseAllowedEmails(process.env.GMGN_ALLOWED_EMAILS).size;
+  const googleRedirect = googleSettings()?.redirectUri;
+  const appleRedirect = appleSettings()?.redirectUri;
   startResearchMonitor();
-  app.listen(PORT, '127.0.0.1', () => {
+  // Express 5 hands listen errors (such as a busy port) to this callback instead of throwing.
+  app.listen(PORT, '127.0.0.1', (error) => {
+    if (error) {
+      console.error(error.code === 'EADDRINUSE'
+        ? `Port ${PORT} on 127.0.0.1 is already in use, probably by another copy of this server. Stop it, or set PORT to a free port, then start again.`
+        : `Server failed to start: ${error.message}`);
+      process.exit(1);
+    }
     console.log(`GMGN swap server listening on http://127.0.0.1:${PORT}`);
     console.log(`CORS origin: ${VITE_ORIGIN}`);
     console.log(
       `LIVE=${liveEnabled() ? 'on' : 'off'} maxNative=${getMaxNativeAmount()} token=${getLocalToken() ? 'set' : 'missing'}`,
     );
+    console.log(allowedCount
+      ? `Sign-in allow-list: ${allowedCount} email(s)`
+      : 'Sign-in allow-list is empty: nobody can sign up or sign in. Set GMGN_ALLOWED_EMAILS in server/.env.');
+    console.log(googleRedirect ? `Google sign-in: on (redirect URI ${googleRedirect})` : 'Google sign-in: off');
+    console.log(appleRedirect ? `Apple sign-in: on (return URL ${appleRedirect})` : 'Apple sign-in: off');
     const c = credStatus();
     console.log(
       `Credentials: apiKey=${c.apiKey} wallet=${c.wallet} (${c.walletAddressMasked || 'none'}) serverSigning=disabled`,

@@ -3,29 +3,21 @@ import { fetchDiscover, type DiscoveredToken } from '../api';
 import { hasLocalToken } from '../localToken';
 import type { ScreenToken, TradeMode } from '../types';
 import { shortMint } from '../watchlist';
+import { age, usd } from '../format';
+import type { InspectTarget } from '../safetyChecks';
 
 interface Props {
   buyAmount: number;
   mode: TradeMode;
   onBuy: (t: ScreenToken) => void;
   onWatch: (mint: string, symbol: string) => void;
+  /** Mint shown in the inspector, highlighted in the list. */
+  selectedMint?: string | null;
+  onSelect?: (t: InspectTarget) => void;
 }
 
 const REFRESH_MS = 60_000;
 
-function usd(n: number | null): string {
-  if (n == null) return '—';
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(0)}`;
-}
-function age(m: number | null): string {
-  if (m == null) return '—';
-  if (m < 60) return `${m}m`;
-  if (m < 60 * 48) return `${Math.round(m / 60)}h`;
-  return `${Math.round(m / 1440)}d`;
-}
 function pct(n: number | null) {
   if (n == null) return <span>—</span>;
   return <span className={n >= 0 ? 'safe-ok' : 'safe-bad'}>{(n >= 0 ? '+' : '') + n.toFixed(1)}%</span>;
@@ -56,7 +48,7 @@ function toBuyToken(t: DiscoveredToken): ScreenToken {
   };
 }
 
-export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
+export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch, selectedMint, onSelect }: Props) {
   const [source, setSource] = useState<'trending' | 'new'>('trending');
   const [tokens, setTokens] = useState<DiscoveredToken[]>([]);
   const [loading, setLoading] = useState(false);
@@ -105,101 +97,95 @@ export function DiscoveryFeed({ buyAmount, mode, onBuy, onWatch }: Props) {
   const passed = tokens.filter((t) => t.safety.ok).length;
 
   return (
-    <section className={`panel ${loading ? 'scanning' : ''}`}>
-      <div className="mock-data-banner" style={{ borderColor: 'rgba(110,203,255,0.45)', color: '#6ecbff' }}>
-        Discovery · real Solana tokens from DexScreener ({source === 'trending' ? 'top boosted' : 'newest profiles'}), each run
-        through the same on-chain + RugCheck/GoPlus gates{minLiq != null && <> · liquidity ≥ {usd(minLiq)}</>}
-        {at && <> · {passed}/{tokens.length} pass · updated {new Date(at).toLocaleTimeString()}</>}
-      </div>
+    <section data-tour="discover" className={`panel discover-panel ${loading ? 'scanning' : ''}`} aria-labelledby="discover-title">
       <div className="panel-head">
-        <h2>Discover · {mode}</h2>
+        <h2 id="discover-title">Discover</h2>
+        <span className="panel-sub">DexScreener</span>
         <div className="spacer" />
-        <button type="button" className={source === 'trending' ? 'btn-primary' : 'btn-ghost'} onClick={() => setSource('trending')}>
-          Top boosted
-        </button>
-        <button type="button" className={source === 'new' ? 'btn-primary' : 'btn-ghost'} onClick={() => setSource('new')}>
-          Latest profiles
-        </button>
-        <label style={{ fontSize: 11, display: 'flex', gap: 4, alignItems: 'center' }}>
-          <input type="checkbox" checked={safeOnly} onChange={(e) => setSafeOnly(e.target.checked)} /> passed only
+        <div className="seg" role="group" aria-label="Discovery source">
+          <button type="button" aria-pressed={source === 'trending'} onClick={() => setSource('trending')}>
+            Top boosted
+          </button>
+          <button type="button" aria-pressed={source === 'new'} onClick={() => setSource('new')}>
+            Latest profiles
+          </button>
+        </div>
+      </div>
+      <div className="discover-controls">
+        <span>
+          {at ? `${passed}/${tokens.length} pass` : loading ? 'scanning…' : 'not scanned yet'}
+          {minLiq != null && <> · liq ≥ {usd(minLiq)}</>}
+          {at && <> · {new Date(at).toLocaleTimeString()}</>}
+        </span>
+        <div className="spacer" />
+        <label className="mini-check">
+          <input type="checkbox" checked={safeOnly} onChange={(e) => setSafeOnly(e.target.checked)} /> Passed only
         </label>
-        <label style={{ fontSize: 11, display: 'flex', gap: 4, alignItems: 'center' }}>
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto 60s
+        <label className="mini-check">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto 60s
         </label>
-        <button type="button" className="btn-ghost" onClick={() => void load(source)} disabled={loading}>
+        <button type="button" className="btn-ghost btn-small" onClick={() => void load(source)} disabled={loading}>
           {loading ? 'Scanning…' : 'Scan'}
         </button>
       </div>
       {err && <div className="cred-msg err">{err}</div>}
-      <div className="table-wrap">
-        <table className="screen">
-          <thead>
-            <tr>
-              <th>Token</th>
-              <th>Liq</th>
-              <th>MCap</th>
-              <th>Vol 24h</th>
-              <th>1h</th>
-              <th>24h</th>
-              <th>Buys/Sells 1h</th>
-              <th>Safety</th>
-              <th>Opportunity</th>
-              <th>Manual action</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={11}>
-                  <div className="help">{loading ? 'Scanning feed…' : 'No tokens right now.'}</div>
-                </td>
-              </tr>
+      <ul className="discover-list" aria-label="Discovered tokens">
+        {rows.length === 0 && (
+          <li className="discover-empty help">{loading ? 'Scanning feed…' : 'No tokens right now.'}</li>
+        )}
+        {rows.map((t) => (
+          <li key={t.mint} className={`discover-row ${t.safety.ok ? 'is-pass' : 'is-blocked'} ${selectedMint === t.mint ? 'is-selected' : ''}`}>
+            {onSelect ? (
+              <button
+                type="button"
+                className="discover-id row-select"
+                aria-pressed={selectedMint === t.mint}
+                aria-label={`Inspect ${t.symbol || shortMint(t.mint)}`}
+                onClick={() => onSelect({ mint: t.mint, symbol: t.symbol || shortMint(t.mint), source: 'discover', discovered: t, buyToken: toBuyToken(t) })}
+              >
+                <span className="sym">{t.symbol || shortMint(t.mint)}</span>
+                <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
+              </button>
+            ) : (
+              <div className="discover-id">
+                <span className="sym">
+                  {t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.symbol || shortMint(t.mint)}</a> : t.symbol}
+                </span>
+                <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
+              </div>
             )}
-            {rows.map((t) => (
-              <tr key={t.mint}>
-                <td>
-                  <div className="token-cell">
-                    <span className="sym">
-                      {t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.symbol || shortMint(t.mint)}</a> : t.symbol}
-                    </span>
-                    <span className="meta" title={t.mint}>{shortMint(t.mint)} · {age(t.ageMinutes)}</span>
-                  </div>
-                </td>
-                <td>{usd(t.liquidityUsd)}</td>
-                <td>{usd(t.marketCapUsd)}</td>
-                <td>{usd(t.volume24hUsd)}</td>
-                <td>{pct(t.change1hPct)}</td>
-                <td>{pct(t.change24hPct)}</td>
-                <td>{t.buys1h ?? '—'}/{t.sells1h ?? '—'}</td>
-                <td className={t.safety.ok ? 'safe-ok' : 'safe-bad'} title={[...t.safety.blockers, ...t.safety.warnings].join('\n')}>
-                  {t.safety.ok
-                    ? t.safety.score != null ? `✓ risk ${t.safety.score}` : "✓ pass"
-                    : `✗ ${(t.safety.blockers[0] || 'blocked').slice(0, 36)}`}
-                </td>
-                <td title={t.ranking?.reasons.join(' · ')}>
-                  {t.ranking ? `${t.ranking.action} · ${t.ranking.score ?? '—'}/100` : 'Unranked'}
-                  <div className="meta">Rules-based · unvalidated</div>
-                </td>
-                <td>
-                  {t.safety.ok ? (
-                    <button type="button" className="buy-btn" disabled={loading || Boolean(err)} onClick={() => onBuy(toBuyToken(t))}>
-                      ⚡ BUY {buyAmount} SOL
-                    </button>
-                  ) : (
-                    <span className="blocked-btn">BLOCKED</span>
-                  )}
-                </td>
-                <td>
-                  <button type="button" className="btn-ghost" onClick={() => onWatch(t.mint, t.symbol)}>
-                    + Watch
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            <div className="discover-change">{pct(t.change1hPct)} <span className="meta">1h</span></div>
+            <div className="discover-stats">
+              <span>liq {usd(t.liquidityUsd)}</span>
+              <span>mc {usd(t.marketCapUsd)}</span>
+              <span>b/s {t.buys1h ?? '—'}/{t.sells1h ?? '—'}</span>
+            </div>
+            <div />
+            <div className="discover-verdict">
+              <span className={t.safety.ok ? 'safe-ok' : 'safe-bad'} title={[...t.safety.blockers, ...t.safety.warnings].join('\n')}>
+                {t.safety.ok
+                  ? t.safety.score != null ? `✓ risk ${t.safety.score}` : '✓ pass'
+                  : `✗ ${(t.safety.blockers[0] || 'blocked').slice(0, 36)}`}
+              </span>
+              <span className="meta" title={`Rules-based, unvalidated. ${t.ranking?.reasons.join(' · ') ?? ''}`}>
+                {t.ranking ? `${t.ranking.action} · ${t.ranking.score ?? '—'}/100` : 'Unranked'}
+              </span>
+            </div>
+            <div className="discover-actions">
+              <button type="button" className="btn-ghost btn-small" onClick={() => onWatch(t.mint, t.symbol)}>
+                + Watch
+              </button>
+              {t.safety.ok ? (
+                <button type="button" className="buy-btn btn-small" disabled={loading || Boolean(err)} onClick={() => onBuy(toBuyToken(t))}>
+                  BUY {buyAmount} SOL
+                </button>
+              ) : (
+                <span className="blocked-btn btn-small">BLOCKED</span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

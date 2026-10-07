@@ -7,7 +7,7 @@ import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
 import {
   addConfirmedBuy,
-  removeConfirmedPosition,
+  applyConfirmedClose,
   updateTradeAttempt,
   withWalletTrade,
   type TradeAttempt,
@@ -16,12 +16,23 @@ import { confirmSwap } from './confirmSwap.ts';
 import { makeBroadcastConnection, makeConnection } from './constants';
 import { validateSwapTransaction } from './validateSwapTransaction.js';
 
+/** What validateSwapTransaction confirmed about the real transaction, reported just before the wallet opens. */
+export interface CheckedSwap {
+  inputAmount: string;
+  quotedOutput: string;
+  minimumOutput: string;
+  slippageBps: number;
+  priorityFeeLamports: string;
+  transactionFeeLamports: number;
+}
+
 async function signSendBase64(
   wallet: WalletContextState,
   swapTransaction: string,
   attempt: TradeAttempt,
   lastValidBlockHeight?: number,
   intent?: { inputMint: string; outputMint: string; inputAmount: string; quotedOutput: string; minimumOutput: string; slippageBps: number },
+  onValidated?: (checked: CheckedSwap) => void,
 ): Promise<{ signature: string; explorerUrl: string }> {
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error('Connect a Solana wallet that can sign transactions');
@@ -36,11 +47,19 @@ async function signSendBase64(
     throw new Error('Transaction signer does not match the connected wallet');
   }
   if (!intent) throw new Error('Swap intent is required for independent transaction validation');
-  await validateSwapTransaction({
+  const fees = await validateSwapTransaction({
     swapTransaction,
     connection: makeConnection(),
     walletPublicKey: wallet.publicKey.toBase58(),
     ...intent,
+  });
+  // Read-only report for the UI. A throwing callback stops here, before the wallet is asked to sign.
+  onValidated?.({
+    inputAmount: intent.inputAmount,
+    quotedOutput: intent.quotedOutput,
+    minimumOutput: intent.minimumOutput,
+    slippageBps: intent.slippageBps,
+    ...fees,
   });
   const originalMessage = tx.message.serialize();
   const signed = await wallet.signTransaction(tx);
@@ -72,7 +91,7 @@ async function signSendBase64(
     await confirmSwap(connection, signature, tx.message.recentBlockhash, lastValidBlockHeight);
     const confirmed = updateTradeAttempt(attempt.id, { status: 'confirmed', error: undefined });
     if (confirmed?.side === 'buy') addConfirmedBuy(confirmed);
-    if (confirmed?.side === 'close') removeConfirmedPosition(confirmed.walletAddress, confirmed.mint);
+    if (confirmed?.side === 'close') applyConfirmedClose(confirmed);
     return { signature, explorerUrl: `https://solscan.io/tx/${signature}` };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -97,8 +116,10 @@ async function executeSolSwap(args: {
   symbol: string;
   amountSol: number;
   slippageBps: number;
+  /** Optional, read-only: receives the checked transaction facts right before the wallet opens. */
+  onValidated?: (checked: CheckedSwap) => void;
 }): Promise<{ signature: string; explorerUrl: string }> {
-  const { wallet, outputMint, symbol, amountSol, slippageBps } = args;
+  const { wallet, outputMint, symbol, amountSol, slippageBps, onValidated } = args;
   if (!wallet.publicKey) throw new Error('Connect a Solana wallet that can sign transactions');
   const walletAddress = wallet.publicKey.toBase58();
   return withWalletTrade({ walletAddress, mint: outputMint, symbol, side: 'buy', amountSol }, async (attempt) => {
@@ -120,7 +141,7 @@ async function executeSolSwap(args: {
       quotedOutput: built.outAmount || '',
       minimumOutput: built.otherAmountThreshold || '',
       slippageBps: built.slippageBps || slippageBps,
-    });
+    }, onValidated);
   });
 }
 
@@ -152,9 +173,10 @@ async function executeSolClose(args: {
   slippageBps: number;
 }): Promise<{ signature: string; explorerUrl: string; amountAtomic: string }> {
   const { wallet, inputMint, percent = 100, slippageBps } = args;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) throw new Error('Sell percent must be a whole number from 1 to 100');
   if (!wallet.publicKey) throw new Error('Connect a Solana wallet that can sign transactions');
   const walletAddress = wallet.publicKey.toBase58();
-  return withWalletTrade({ walletAddress, mint: inputMint, side: 'close', amountSol: 0, positionId: inputMint }, async (attempt) => {
+  return withWalletTrade({ walletAddress, mint: inputMint, side: 'close', amountSol: 0, percent, positionId: inputMint }, async (attempt) => {
     if (!wallet.signTransaction) throw new Error('Connected wallet cannot sign transactions');
     await requireMintSafe(inputMint);
     const bal = await getTokenBalanceAtomic(wallet.publicKey!, inputMint);

@@ -1,5 +1,6 @@
 /** Thin client for the local GMGN quote backend. Secrets never touch the browser. */
 
+import { noteSignInRequired } from './auth';
 import { getLocalToken } from './localToken';
 
 export interface HealthResponse {
@@ -29,6 +30,8 @@ export interface HealthResponse {
   defaultSlippageBps?: number;
   maxPriceImpactPct?: number;
   mintSafetyRequired?: boolean;
+  maxRugScore?: number;
+  minLiquidityUsd?: number;
   paperModeSupported?: boolean;
   rpcIsPublic?: boolean;
   solanaRpcConfigured?: boolean;
@@ -71,6 +74,7 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   });
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
   if (!res.ok) {
+    noteSignInRequired(res.status, body);
     throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
   }
   return body;
@@ -238,6 +242,8 @@ export interface MintSafetyCheck {
   id: string;
   ok: boolean;
   detail: string;
+  /** Severity from the rug scanners ('info' | 'warn' | 'danger' or a provider level). On-chain checks omit it. */
+  level?: string;
 }
 
 export interface MintSafetyResponse {
@@ -368,7 +374,8 @@ export function fetchPricesInSol(mints: string[]): Promise<{ ok: boolean; prices
 
 export interface PaperPosition {
   id: string; mint: string; symbol: string; state: 'open' | 'closed'; openedAt: number;
-  costLamports: string; quantityAtomic: string; realisedPnlLamports?: string;
+  costLamports: string; quantityAtomic: string; realisedPnlLamports?: string; proceedsLamports?: string;
+  partialExits?: { at: number; percent: number; quantityAtomic: string; proceedsLamports: string; realisedPnlLamports: string }[];
   closedAt?: number; exitReason?: string; exitPending: string | null; lastError: string | null;
   mark: { at: number; netLamports: string; pnlPct: number } | null;
 }
@@ -391,8 +398,9 @@ export const refreshPaperPortfolio = () => jsonFetch<PaperPortfolioResponse>('/a
 export const fetchScanHistory = () => jsonFetch<ScanHistoryResponse>('/api/research/scans?limit=30');
 export const openPaperPosition = (body: { id: string; mint: string; symbol: string; amount: number; slippageBps: number }) =>
   jsonFetch<{ position: PaperPosition }>('/api/paper/open', { method: 'POST', body: JSON.stringify(body) });
-export const closePaperPosition = (id: string) =>
-  jsonFetch<{ position: PaperPosition }>('/api/paper/close', { method: 'POST', body: JSON.stringify({ id }) });
+/** Sells `percent` of a paper position; 100 closes it. */
+export const closePaperPosition = (id: string, percent = 100) =>
+  jsonFetch<{ position: PaperPosition }>('/api/paper/close', { method: 'POST', body: JSON.stringify({ id, percent }) });
 
 export interface OpportunityRanking {
   version: string; score: number | null; action: 'candidate' | 'watch' | 'blocked'; reasons: string[];

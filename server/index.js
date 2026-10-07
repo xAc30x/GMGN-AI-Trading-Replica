@@ -548,8 +548,8 @@ function writeEnvMerge(updates, { allowKeys = CRED_ENV_KEYS } = {}) {
 
 export const app = express();
 app.disable('x-powered-by');
-// Behind the HTTPS reverse proxy on this machine, read the visitor address from X-Forwarded-For,
-// but only when the request itself comes from loopback, so remote clients cannot fake it.
+// Caddy (or the Vite dev proxy) connects from this machine. Read the visitor address from
+// X-Forwarded-For only for loopback requests, so remote clients cannot fake it for lockouts and limits.
 app.set('trust proxy', 'loopback');
 app.use(securityHeaders({ browserRpcUrl: process.env.VITE_SOLANA_RPC_URL }));
 app.use(safeJsonResponses());
@@ -560,8 +560,6 @@ app.use(
 );
 app.use('/api', requestRateLimit({ perMinute: API_REQUESTS_PER_MIN }));
 app.use(express.json({ limit: '32kb' }));
-// Caddy (or the Vite dev proxy) connects from this machine, so trust its forwarded client IP for lockouts.
-app.set('trust proxy', 'loopback');
 
 // Sign-up/sign-in routes come first; every other /api route needs a signed-in session.
 app.use('/api', registerAuthRoutes(app));

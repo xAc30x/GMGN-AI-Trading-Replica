@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { createWindowCounter } from '../rateLimit.js';
+import { createSignedInSession } from './authSession.js';
 
 const TOKEN = 'rate-limit-test-token-0123456789abcdef';
 const AUTH_LIMIT = 3;
@@ -24,7 +25,12 @@ test('window counter rejects invalid limits', () => {
   assert.throws(() => createWindowCounter({ windowMs: 0, max: 1 }), /windowMs/);
 });
 
+// Every /api route except sign-in needs a session; one signed-in session is shared by these tests.
+let session;
+after(() => session?.cleanup());
+
 async function startApp(t) {
+  session ??= await createSignedInSession();
   const saved = Object.fromEntries(['GMGN_LOCAL_TOKEN', 'GMGN_AUTH_FAILURES_PER_15_MIN', 'GMGN_API_REQUESTS_PER_MIN']
     .map(k => [k, process.env[k]]));
   process.env.GMGN_LOCAL_TOKEN = TOKEN;
@@ -42,7 +48,7 @@ async function startApp(t) {
 
 // The proxy sets X-Forwarded-For; each test uses its own visitor address so counts do not mix.
 const get = (base, visitor, token) => fetch(`${base}/api/paper/portfolio`, {
-  headers: { 'x-forwarded-for': visitor, ...(token ? { 'x-gmgn-token': token } : {}) },
+  headers: { 'x-forwarded-for': visitor, cookie: session.cookie, ...(token ? { 'x-gmgn-token': token } : {}) },
 });
 
 test('repeated wrong tokens lock out that visitor only, even for the correct token', async t => {
@@ -71,13 +77,13 @@ test('requests without a token, or with only Basic credentials, never trigger th
   for (let i = 0; i < AUTH_LIMIT + 2; i += 1) {
     assert.equal((await get(base, visitor)).status, 401);
     const basic = await fetch(`${base}/api/paper/portfolio`, {
-      headers: { 'x-forwarded-for': visitor, authorization: 'Basic dXNlcjpwYXNz' },
+      headers: { 'x-forwarded-for': visitor, cookie: session.cookie, authorization: 'Basic dXNlcjpwYXNz' },
     });
     assert.equal(basic.status, 401);
   }
   assert.equal((await get(base, visitor, TOKEN)).status, 200);
   const bearer = await fetch(`${base}/api/paper/portfolio`, {
-    headers: { 'x-forwarded-for': '203.0.113.51', authorization: `Bearer ${TOKEN}` },
+    headers: { 'x-forwarded-for': '203.0.113.51', cookie: session.cookie, authorization: `Bearer ${TOKEN}` },
   });
   assert.equal(bearer.status, 200, 'Bearer tokens still work');
 });

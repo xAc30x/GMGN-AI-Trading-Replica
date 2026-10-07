@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createSignedInSession } from './authSession.js';
 import { REDACTED, jsonErrorHandler, redactText, sanitizeBody, secretValues } from '../errorSafety.js';
 
 const RPC_KEY = 'rpc-api-key-0123456789';
@@ -7,6 +8,7 @@ const RPC_URL = `https://mainnet.helius-rpc.example/?api-key=${RPC_KEY}`;
 
 test('secret values come only from configured, non-trivial environment entries', () => {
   assert.deepEqual(secretValues({ SOLANA_RPC_URL: RPC_URL, GMGN_API_KEY: 'short', OTHER: 'not-a-secret-value' }), [RPC_URL]);
+  assert.deepEqual(secretValues({ GOOGLE_CLIENT_SECRET: 'google-client-secret-value' }), ['google-client-secret-value']);
 });
 
 test('diagnostic text loses configured secrets and URL paths and queries', () => {
@@ -51,17 +53,19 @@ test('the RPC proxy never returns the configured RPC URL in its error', async t 
   // A malformed URL makes fetch fail with "Failed to parse URL from <url>", quoting the key.
   process.env.SOLANA_RPC_URL = `http://bad host/${RPC_KEY}`;
   process.env.GMGN_LOCAL_TOKEN = 'error-safety-test-token-0123456789';
+  const session = await createSignedInSession();
   const { app } = await import('../index.js');
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
     await new Promise(resolve => server.close(resolve));
+    session.cleanup();
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   });
   const base = `http://127.0.0.1:${server.address().port}`;
   const rpc = await fetch(`${base}/api/sol/rpc`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-gmgn-token': process.env.GMGN_LOCAL_TOKEN },
+    headers: { 'content-type': 'application/json', 'x-gmgn-token': process.env.GMGN_LOCAL_TOKEN, cookie: session.cookie },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getSlot', params: [] }),
   });
   const text = await rpc.text();
@@ -69,7 +73,7 @@ test('the RPC proxy never returns the configured RPC URL in its error', async t 
   assert.ok(!text.includes(RPC_KEY), text);
   const bad = await fetch(`${base}/api/sol/rpc`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-gmgn-token': process.env.GMGN_LOCAL_TOKEN },
+    headers: { 'content-type': 'application/json', 'x-gmgn-token': process.env.GMGN_LOCAL_TOKEN, cookie: session.cookie },
     body: '{not json',
   });
   assert.equal(bad.status, 400);

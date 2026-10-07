@@ -5,7 +5,7 @@
  */
 
 /** Environment values that must never appear in a response. */
-const SECRET_ENV_KEYS = ['SOLANA_RPC_URL', 'VITE_SOLANA_RPC_URL', 'GMGN_API_KEY', 'GMGN_LOCAL_TOKEN'];
+const SECRET_ENV_KEYS = ['SOLANA_RPC_URL', 'VITE_SOLANA_RPC_URL', 'GMGN_API_KEY', 'GMGN_LOCAL_TOKEN', 'GOOGLE_CLIENT_SECRET'];
 
 /** Shorter values are too likely to match ordinary text to be replaced safely. */
 const MIN_SECRET_LENGTH = 8;

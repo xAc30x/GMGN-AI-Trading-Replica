@@ -29,6 +29,7 @@ import { assessMint, assertMintSafe } from './mintSafety.js';
 import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
+import { registerLiveTradeRoutes } from './liveTradeRoutes.js';
 import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
 import { appleSettings, googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
@@ -1127,6 +1128,7 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 
 const scanDiscovery = createDiscoveryScanner({ assertMint: mint => assertOutputToken('sol', mint) });
 registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken, scanDiscovery });
+registerLiveTradeRoutes(app, { requireLocalToken, connection: portfolioConnection });
 const startResearchMonitor = registerResearchRoutes(app, {
   requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled, scanDiscovery,
 });

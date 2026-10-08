@@ -421,3 +421,19 @@ export interface ResearchAutomationResponse {
 export const fetchResearchAutomation = () => jsonFetch<ResearchAutomationResponse>('/api/research/automation');
 export const updateResearchAutomation = (settings: Partial<ResearchAutomationResponse['settings']>) =>
   jsonFetch('/api/research/automation', { method: 'POST', body: JSON.stringify(settings) });
+
+export interface LiveTradeRow {
+  tradeId: string; signature: string; wallet: string; mint: string; side: 'buy' | 'close';
+  status: 'confirmed' | 'failed'; slot: number; blockTime: number | null;
+  solDeltaLamports: string; tokenDeltaAtomic: string; feeLamports: string; recordedAt: number;
+}
+export interface LiveTradePosition {
+  mint: string; wallet: string; heldAtomic: string; costLamports: string; boughtLamports: string; soldLamports: string;
+  feesLamports: string; realisedPnlLamports: string; trades: number; failed: number;
+}
+export interface LiveTradeRecordResponse {
+  trades: LiveTradeRow[]; positions: LiveTradePosition[];
+  totals: { realisedPnlLamports: string; feesLamports: string; openCostLamports: string };
+  sync: { stored: number; waiting: number; error: string | null };
+}
+export const fetchLiveTradeRecord = () => jsonFetch<LiveTradeRecordResponse>('/api/live/trades');

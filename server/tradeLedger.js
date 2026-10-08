@@ -140,3 +140,13 @@ export function completeBroadcast(tradeId, signature) {
     db.prepare("UPDATE authorizations SET state='accepted',updated_at=? WHERE trade_id=?").run(Date.now(), tradeId);
   });
 }
+
+/**
+ * Broadcasts that reached the RPC (accepted) or may have (pending), with their signatures.
+ * Read-only: the live trade record uses these to look up what actually happened on chain.
+ */
+export function sentBroadcasts() {
+  return withLedger(db => db.prepare(`SELECT trade_id AS tradeId, wallet, side, intent, signature, updated_at AS updatedAt
+    FROM authorizations WHERE signature IS NOT NULL AND state IN ('pending','accepted') ORDER BY updated_at`).all()
+    .map(row => ({ ...row, intent: JSON.parse(row.intent) })));
+}

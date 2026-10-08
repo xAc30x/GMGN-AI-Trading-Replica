@@ -273,6 +273,16 @@ validator, default-off broadcast gate, durable reservations, and signature recon
 The original replica and audit worktrees remain available; their execution-path
 variants were not merged over the release safeguards.
 
+## Live trade record
+
+After a LIVE trade is sent, the server reads the confirmed transaction back from the
+Solana RPC and saves what actually happened to the wallet in `server/.live-trades.sqlite`
+(override with `GMGN_LIVE_TRADES_PATH`): all SOL spent or received, including network
+fees and new token account rent, and the token amount. Failed transactions are saved
+too, because their fees were still paid. The Research tab shows the totals per token
+using average cost. This record is read-only: it never builds, signs or sends anything.
+The file is permissioned to 0600 and excluded from Git; back it up with the others.
+
 ## Persistent research and paper portfolio
 
 Discovery now saves each successful feed scan in `server/.research.sqlite` (override

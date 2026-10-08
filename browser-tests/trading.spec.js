@@ -70,6 +70,21 @@ function unsignedSwap({ unsafe = false, sell = null } = {}) {
   return base64(transaction.serialize());
 }
 
+/** Server-shaped close of the emptied token account; `destination` lets a test redirect the rent. */
+function unsignedReclaim({ destination = wallet.publicKey } = {}) {
+  const account = associatedTokenAddress(wallet.publicKey, outputMint, tokenProgram);
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [new TransactionInstruction({ programId: tokenProgram, data: Buffer.from([9]), keys: [
+      { pubkey: account, isSigner: false, isWritable: true },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
+    ] })],
+  }).compileToV0Message());
+  return { transaction: base64(transaction.serialize()), account: account.toBase58() };
+}
+
 // Every test starts signed in; sign-in itself is covered in auth.spec.js.
 // The first-launch tour covers the page; tests start as a returning user who has already seen it,
 // except tests tagged @first-visit, which check the tour itself.
@@ -120,7 +135,7 @@ async function installWallet(page) {
 }
 
 async function installApiFixtures(page, scenario = {}) {
-  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, paperClosePercents: [], closeBuilds: [], safetyChecks: 0 };
+  const counts = { builds: 0, sends: 0, signatures: 0, paperOpens: 0, paperCloses: 0, paperClosePercents: [], closeBuilds: [], reclaimBuilds: [], safetyChecks: 0 };
   let paperPosition = null;
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
@@ -153,7 +168,13 @@ async function installApiFixtures(page, scenario = {}) {
       const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
       return route.fulfill({ json: { ok: true, trades: [{}, {}],
         positions: [{ mint, wallet: 'w', heldAtomic: '500', costLamports: '6000000', boughtLamports: '12000000', soldLamports: '5000000',
-          feesLamports: '10000', realisedPnlLamports: '-1000000', trades: 2, failed: 0 }],
+          rentBackLamports: '0', feesLamports: '10000', realisedPnlLamports: '-1000000', trades: 2, failed: 0 },
+        ...(scenario.soldOut ? [
+          { mint: mintText, wallet: walletText, heldAtomic: '0', costLamports: '0', boughtLamports: '12000000', soldLamports: '9000000',
+            rentBackLamports: '0', feesLamports: '10000', realisedPnlLamports: '-3000000', trades: 2, failed: 0 },
+          { mint: inputMint.toBase58(), wallet: walletText, heldAtomic: '0', costLamports: '0', boughtLamports: '12000000', soldLamports: '9000000',
+            rentBackLamports: '2034280', feesLamports: '15000', realisedPnlLamports: '-965720', trades: 3, failed: 0 },
+        ] : [])],
         totals: { realisedPnlLamports: '-1000000', feesLamports: '10000', openCostLamports: '6000000' },
         sync: { stored: 0, waiting: 0, error: null },
         dailyLoss: { dayStart: 0, resetsAt: 86400000, realisedTodayLamports: '-1000000', lossTodayLamports: '1000000',
@@ -276,6 +297,13 @@ async function installApiFixtures(page, scenario = {}) {
         lastValidBlockHeight: 100, inAmount: amount, outAmount: '5000000', otherAmountThreshold: '4950000',
         slippageBps: 100, inputMint: mintText, outputMint: inputMint.toBase58(), amountAtomic: amount,
       } });
+    }
+    if (url.pathname === '/api/sol/reclaim-tx') {
+      counts.reclaimBuilds.push(body.mint);
+      const built = unsignedReclaim({ destination: scenario.reclaimTo ?? wallet.publicKey });
+      return route.fulfill({ json: { ok: true, chain: 'sol', side: 'reclaim', mint: body.mint, transaction: built.transaction,
+        lastValidBlockHeight: 100, accounts: [{ address: built.account, program: tokenProgram.toBase58(), lamports: 2039280 }],
+        refundLamports: '2039280' } });
     }
     if (url.pathname === '/api/sol/rpc') {
       const rpc = body;
@@ -446,8 +474,26 @@ test('LIVE partial sell is wallet-signed, keeps the holding with a smaller cost,
   await expect(sell).toHaveCount(0);
 
   assert.deepEqual(counts.closeBuilds, [25, 100]);
-  assert.equal(await page.evaluate(() => window.__walletSignCalls), 3);
-  assert.equal(counts.sends, 3);
+  // After the full sell the app offers to close the empty account; the dialog is accepted.
+  await expect(page.getByText(/Got 0\.002039 SOL back/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/Closed empty TEST account · 0\.002039 SOL rent back/).first()).toBeVisible();
+  assert.deepEqual(counts.reclaimBuilds, [mintText]);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 4);
+  assert.equal(counts.sends, 4);
+});
+
+test('a rent refund sent anywhere but the connected wallet is refused before the wallet is asked', async ({ page }) => {
+  const counts = await installApiFixtures(page, { reclaimTo: Keypair.generate().publicKey });
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  const holdings = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tracked holdings' }) });
+  await holdings.getByRole('group', { name: 'Sell TEST' }).getByRole('button', { name: 'Sell 100%' }).click();
+  await expect(page.getByText(/Could not close empty TEST account: .*sends the rent somewhere other than the connected wallet/).first())
+    .toBeVisible({ timeout: 10_000 });
+  assert.equal(counts.reclaimBuilds.length, 1);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 2, 'buy and sell only');
+  assert.equal(counts.sends, 2);
 });
 
 test('a live holding past its stop-loss shows an alert whose sell still goes through the wallet', async ({ page }) => {
@@ -472,7 +518,9 @@ test('a live holding past its stop-loss shows an alert whose sell still goes thr
   await alert.getByRole('button', { name: 'Sell all (wallet will ask)' }).click();
   await expect(page.getByText(/SOL wallet close TEST · tx/).first()).toBeVisible({ timeout: 10_000 });
   assert.deepEqual(counts.closeBuilds, [100]);
-  assert.equal(await page.evaluate(() => window.__walletSignCalls), 2);
+  // The accepted follow-up closes the emptied token account: one more wallet approval.
+  await expect(page.getByText(/Got 0\.002039 SOL back/)).toBeVisible({ timeout: 10_000 });
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 3);
 });
 
 test('holdings show cached valuation and hide zero balances without deleting trade history', async ({ page }) => {
@@ -560,6 +608,25 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await page.getByRole('button', { name: 'Trade', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Discover', exact: true }).getByText('watch · 20/100', { exact: true })).toBeVisible();
   assert.equal(counts.builds, 0); assert.equal(counts.sends, 0); assert.equal(counts.paperOpens, 0);
+});
+
+test('the live trade record offers the rent back only for sold-out coins of the connected wallet', async ({ page }) => {
+  const counts = await installApiFixtures(page, { soldOut: true });
+  await installWallet(page);
+  await page.goto('/');
+  await expect(page.locator('.wallet-adapter-button')).toContainText(walletText.slice(0, 4), { timeout: 15_000 });
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('group', { name: 'Trading mode' }).getByRole('button', { name: 'PAPER' }).click();
+  await page.getByRole('button', { name: 'Research', exact: true }).click();
+  const record = page.getByRole('region', { name: 'Live trade record', exact: true });
+  const rows = record.getByRole('row');
+  await expect(rows.filter({ hasText: 'DezXAZ…' }).getByRole('button')).toHaveCount(0); // still held, another wallet
+  await expect(rows.filter({ hasText: 'So1111…' })).toContainText('0.002034 SOL back');
+  await rows.filter({ hasText: `${mintText.slice(0, 6)}…` }).getByRole('button', { name: 'Get rent back' }).click();
+  await expect(page.getByText(/Got 0\.002039 SOL back/)).toBeVisible({ timeout: 10_000 });
+  assert.deepEqual(counts.reclaimBuilds, [mintText]);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 1);
+  assert.equal(counts.sends, 1);
 });
 
 test('mode banner always states the active mode and what it can do', async ({ page }) => {

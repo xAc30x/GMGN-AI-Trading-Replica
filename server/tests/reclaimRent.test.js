@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { buildReclaimTransaction, emptyTokenAccounts, TOKEN_PROGRAMS } from '../reclaimRent.js';
 import { authorizeBroadcast } from '../tradeLedger.js';
+import { validateReclaimTransaction } from '../../src/solana/validateReclaimTransaction.js';
 
 const [SPL, TOKEN_2022] = TOKEN_PROGRAMS;
 const MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -77,4 +78,28 @@ test('the trade ledger accepts the close transaction as a LIVE reclaim build', a
     walletAddress: W, side, mode: 'LIVE', lastValidBlockHeight: built.lastValidBlockHeight, intent: { inputMint: MINT } });
   assert.throws(() => authorize('refund'), /Only LIVE builds/);
   authorize('reclaim');
+});
+
+test('the browser check accepts the server build and refuses any change to where the rent goes or what runs', async () => {
+  const built = await buildReclaimTransaction({ connection: connection([account()]), wallet: W, mint: MINT });
+  const accounts = built.accounts.map(a => a.address);
+  validateReclaimTransaction({ transaction: built.transaction, walletPublicKey: W, accounts });
+  const changed = mutate => {
+    const message = TransactionMessage.decompile(VersionedTransaction.deserialize(Buffer.from(built.transaction, 'base64')).message);
+    mutate(message);
+    return Buffer.from(new VersionedTransaction(message.compileToV0Message()).serialize()).toString('base64');
+  };
+  const thief = Keypair.generate().publicKey;
+  const cases = [
+    [changed(m => { m.instructions[0].keys[1] = { pubkey: thief, isSigner: false, isWritable: true }; }), /rent somewhere other than the connected wallet/],
+    [changed(m => { m.instructions.push(SystemProgram.transfer({ fromPubkey: wallet, toPubkey: thief, lamports: 1 })); }), /number of instructions/],
+    [changed(m => { m.instructions[0] = SystemProgram.transfer({ fromPubkey: wallet, toPubkey: thief, lamports: 1 }); }), /other than the token program/],
+    [changed(m => { m.instructions[0].data = Buffer.from([3]); }), /other than closing an account/],
+    [changed(m => { m.instructions[0].keys[0].pubkey = thief; }), /unexpected account/],
+  ];
+  for (const [transaction, reason] of cases) {
+    assert.throws(() => validateReclaimTransaction({ transaction, walletPublicKey: W, accounts }), reason);
+  }
+  assert.throws(() => validateReclaimTransaction({ transaction: built.transaction, walletPublicKey: thief.toBase58(), accounts }), /fee payer/);
+  assert.throws(() => validateReclaimTransaction({ transaction: 'not base64!', walletPublicKey: W, accounts }), /cannot be decoded/);
 });

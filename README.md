@@ -293,6 +293,12 @@ included, and the rent goes back to the same wallet. It passes through the same 
 ledger as swaps, so only the unchanged build can be broadcast. The record counts the
 returned rent as realised P&L, which also lowers today's loss for the daily limit.
 
+In the app, after a LIVE sell of 100% the app asks whether to close the emptied account,
+and the Live trade record shows a **Get rent back** button for sold-out coins of the
+connected wallet. The browser checks the transaction itself before the wallet opens: it
+must only close the listed accounts, send the rent to the connected wallet, and need no
+other signer. If the sell already closed the account, there is nothing to get back.
+
 ## Persistent research and paper portfolio
 
 Discovery now saves each successful feed scan in `server/.research.sqlite` (override

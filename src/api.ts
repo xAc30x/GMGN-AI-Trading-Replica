@@ -292,6 +292,26 @@ export function fetchSolCloseTx(body: {
   return jsonFetch('/api/sol/close-tx', { method: 'POST', body: JSON.stringify(body) });
 }
 
+export interface SolReclaimTxResponse {
+  ok: boolean;
+  error?: string;
+  transaction: string;
+  lastValidBlockHeight: number;
+  accounts: { address: string; program: string; lamports: number }[];
+  refundLamports: string;
+}
+
+/** Unsigned close of the wallet's empty token accounts for one coin; the rent returns to the wallet. */
+export function fetchSolReclaimTx(body: {
+  tradeId: string;
+  mint: string;
+  userPublicKey: string;
+  confirm: true;
+  mode: 'LIVE';
+}): Promise<SolReclaimTxResponse> {
+  return jsonFetch('/api/sol/reclaim-tx', { method: 'POST', body: JSON.stringify(body) });
+}
+
 export interface WatchlistScanItem {
   mint: string;
   ok: boolean;
@@ -423,13 +443,13 @@ export const updateResearchAutomation = (settings: Partial<ResearchAutomationRes
   jsonFetch('/api/research/automation', { method: 'POST', body: JSON.stringify(settings) });
 
 export interface LiveTradeRow {
-  tradeId: string; signature: string; wallet: string; mint: string; side: 'buy' | 'close';
+  tradeId: string; signature: string; wallet: string; mint: string; side: 'buy' | 'close' | 'reclaim';
   status: 'confirmed' | 'failed'; slot: number; blockTime: number | null;
   solDeltaLamports: string; tokenDeltaAtomic: string; feeLamports: string; recordedAt: number;
 }
 export interface LiveTradePosition {
   mint: string; wallet: string; heldAtomic: string; costLamports: string; boughtLamports: string; soldLamports: string;
-  feesLamports: string; realisedPnlLamports: string; trades: number; failed: number;
+  rentBackLamports: string; feesLamports: string; realisedPnlLamports: string; trades: number; failed: number;
 }
 export interface LiveTradeRecordResponse {
   trades: LiveTradeRow[]; positions: LiveTradePosition[];

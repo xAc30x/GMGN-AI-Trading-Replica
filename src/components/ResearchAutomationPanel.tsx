@@ -64,8 +64,9 @@ export function ResearchAutomationPanel() {
         <div className="table-wrap" tabIndex={0} role="region" aria-label="Paper strategy comparison"><table className="screen">
           <thead><tr><th>Strategy</th><th>Open / closed</th><th>Net P&amp;L (SOL)</th><th>Expectancy / trade (SOL)</th><th>Profit factor</th><th>Observed drawdown</th></tr></thead>
           <tbody>{data.accounts.map(a => <tr key={a.id}>
-            <td>{a.id}{a.currentVersion === false && <div className="meta">Retired · monitoring existing positions</div>}<div className="meta">{a.metrics.evaluation}</div></td>
-            <td>{a.portfolio.stats.open} / {a.metrics.closed}<div className="meta">{a.metrics.wins} wins</div></td>
+            <td>{a.id}{a.currentVersion === false && <div className="meta">Retired · monitoring existing positions</div>}<div className={`strategy-verdict strategy-verdict-${a.verdict.status}`}>{a.verdict.text}</div>
+              {a.verdict.status !== 'too_few' && <div className="meta">{a.metrics.evaluation}</div>}</td>
+            <td>{a.portfolio.stats.open} / {a.metrics.closed}<div className="meta">{a.metrics.wins} wins{a.metrics.winRatePct == null ? '' : ` (${a.metrics.winRatePct.toFixed(0)}%)`}</div></td>
             <td>{sol(clock - data.at <= 45000 ? a.portfolio.stats.netPnlLamports : null)}<div className="meta">Realized {sol(a.portfolio.stats.realisedPnlLamports)}</div></td>
             <td>{a.metrics.netExpectancySol == null ? '—' : a.metrics.netExpectancySol.toFixed(6)}</td>
             <td>{a.metrics.profitFactor == null ? a.metrics.noLosingTrades ? 'No losses yet' : '—' : a.metrics.profitFactor.toFixed(2)}</td>

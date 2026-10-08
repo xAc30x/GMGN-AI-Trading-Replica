@@ -144,8 +144,9 @@ async function installApiFixtures(page, scenario = {}) {
         jobs: [{ source: 'trending', next_at: Date.now() + 120000, lease_until: 0, last_at: Date.now(), failures: 0, last_error: null }],
         accounts: ['momentum-quality-v1', 'safety-feed-v1'].map(id => ({ id, startedAt: Date.now(),
           portfolio: { ...paperPortfolio(), positions: [], stats: { ...paperPortfolio().stats, open: 0, closed: 0, realisedPnlLamports: '0', netPnlLamports: '0' } },
-          decisionCounts: [], metrics: { closed: 0, wins: 0, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
-            maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' } })), decisions: [],
+          decisionCounts: [], metrics: { closed: 0, wins: 0, winRatePct: null, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
+            maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' },
+          verdict: { status: 'too_few', beatsBaseline: null, text: 'Too few trades to judge: 0 of 30 closed.' } })), decisions: [],
       } });
     }
     if (url.pathname === '/api/paper/portfolio' || url.pathname === '/api/paper/refresh') return route.fulfill({ json: paperPortfolio() });
@@ -514,6 +515,7 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
   await expect(panel.getByRole('cell', { name: /safety-feed-v1/ })).toBeVisible();
+  await expect(panel.getByText('Too few trades to judge: 0 of 30 closed.', { exact: true })).toHaveCount(2);
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
   await page.getByRole('button', { name: 'Trade', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Discover', exact: true }).getByText('watch · 20/100', { exact: true })).toBeVisible();

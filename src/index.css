@@ -2240,6 +2240,9 @@ table.screen tr:hover td {
 .research-decisions { padding-left: 20px; font-size: 12px; line-height: 1.7; }
 .research-decisions li { margin-bottom: 8px; }
 .automation-panel table.screen { min-width: 800px; }
+.strategy-verdict { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.strategy-verdict-losing { color: var(--red); }
+.strategy-verdict-positive { color: var(--lime); }
 
 /* In the workspace the primary action takes the mode color; lime only means "check passed". */
 .workspace .buy-btn:not(:disabled) {

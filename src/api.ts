@@ -412,8 +412,9 @@ export interface ResearchAutomationResponse {
   jobs: { source: string; next_at: number; lease_until: number; failures: number; last_at: number | null; last_error: string | null }[];
   accounts: { id: string; currentVersion?: boolean; startedAt: number; portfolio: PaperPortfolioResponse;
     decisionCounts: { status: string; count: number }[];
-    metrics: { closed: number; wins: number; netExpectancySol: number | null; profitFactor: number | null;
-      noLosingTrades: boolean; maxObservedDrawdownPct: number | null; missingEquitySamples: number; evaluation: string } }[];
+    metrics: { closed: number; wins: number; winRatePct: number | null; netExpectancySol: number | null; profitFactor: number | null;
+      noLosingTrades: boolean; maxObservedDrawdownPct: number | null; missingEquitySamples: number; evaluation: string };
+    verdict: { status: 'too_few' | 'losing' | 'positive'; beatsBaseline: boolean | null; text: string } }[];
   decisions: { id: string; account_id: string; at: number; mint: string | null; status: string;
     data: { source: string; selectionReason?: string; reason?: string | null; error?: string | null; ranking?: OpportunityRanking | null } }[];
 }

@@ -3193,3 +3193,11 @@ html {
   border-color: var(--lime-dim);
   background: var(--lime-glow);
 }
+
+/* Live exit alerts in Tracked holdings. */
+.exit-rules { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
+.exit-rules select { background: var(--bg-card-2); color: var(--text); border: 1px solid var(--border-soft); border-radius: 4px; padding: 2px 4px; }
+.exit-alert { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  margin-top: 6px; padding: 6px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.exit-alert-stop_loss { color: var(--red); background: rgba(232, 90, 74, 0.08); border: 1px solid var(--red-dim); }
+.exit-alert-take_profit { color: var(--lime); background: var(--lime-glow); border: 1px solid var(--lime-dim); }

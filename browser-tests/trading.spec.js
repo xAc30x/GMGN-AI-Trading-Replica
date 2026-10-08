@@ -214,7 +214,7 @@ async function installApiFixtures(page, scenario = {}) {
     }
     if (url.pathname === '/api/sol/position-values') {
       return route.fulfill({ json: { ok: true, results: body.items.map(item => ({ ...item, ok: true,
-        outLamports: '20000000', priceImpactPct: '0.001', quotedAt: Date.now(), stale: Boolean(scenario.stale) })), at: Date.now() } });
+        outLamports: scenario.outLamports ?? '20000000', priceImpactPct: '0.001', quotedAt: Date.now(), stale: Boolean(scenario.stale) })), at: Date.now() } });
     }
     if (url.pathname === '/api/sol/prices') {
       return route.fulfill({ json: { ok: true, prices: { [mintText]: 0.002 }, solUsd: 100, at: Date.now() } });
@@ -448,6 +448,31 @@ test('LIVE partial sell is wallet-signed, keeps the holding with a smaller cost,
   assert.deepEqual(counts.closeBuilds, [25, 100]);
   assert.equal(await page.evaluate(() => window.__walletSignCalls), 3);
   assert.equal(counts.sends, 3);
+});
+
+test('a live holding past its stop-loss shows an alert whose sell still goes through the wallet', async ({ page }) => {
+  const scenario = { outLamports: '7000000' }; // bought for 0.01 SOL, now worth 0.007 SOL: -30%
+  const counts = await installApiFixtures(page, scenario);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  const holdings = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tracked holdings' }) });
+  const alert = holdings.getByRole('alert');
+  await expect(alert).toContainText('TEST: Stop-loss reached (-20%): -30.0% by sell-now quote.');
+  await expect(page).toHaveTitle(/^\(1\) Exit alert · /);
+  await page.getByRole('dialog', { name: /One-Click Buy/ }).getByRole('button', { name: 'Close' }).click();
+  await holdings.screenshot({ path: '/tmp/gmgn-exit-alert.png' });
+  // Moving the level past the loss clears the alert; the choice is remembered.
+  await holdings.getByLabel('Stop-loss alert').selectOption('-50');
+  await expect(alert).toHaveCount(0);
+  await expect(page).not.toHaveTitle(/Exit alert/);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.exitAlertRules.v1')).stopLossPct), -50);
+  await holdings.getByLabel('Stop-loss alert').selectOption('-20');
+  assert.equal(counts.closeBuilds.length, 0, 'an alert never sells on its own');
+  await alert.getByRole('button', { name: 'Sell all (wallet will ask)' }).click();
+  await expect(page.getByText(/SOL wallet close TEST · tx/).first()).toBeVisible({ timeout: 10_000 });
+  assert.deepEqual(counts.closeBuilds, [100]);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 2);
 });
 
 test('holdings show cached valuation and hide zero balances without deleting trade history', async ({ page }) => {

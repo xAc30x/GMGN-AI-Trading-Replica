@@ -25,7 +25,7 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 8. Demo/placeholder mints denylisted; buy field starts empty; re-type CA
 9. `/api/swap` and `/api/close` (gmgn-cli) return **410**
 10. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
-11. SL/TP text is **not** placed on-chain
+11. SL/TP text is **not** placed on-chain. Tracked holdings show stop-loss / profit-target **alerts** (default -20% / +30%, changeable there) while the tab is open; a sale still needs the normal sell button and wallet approval
 12. SHADOW metrics and wallet evaluation are **mock**; PAPER/LIVE discovery and holdings use provider data
 
 ## Run

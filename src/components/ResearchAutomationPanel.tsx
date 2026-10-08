@@ -73,8 +73,8 @@ export function ResearchAutomationPanel() {
             <td>{a.metrics.maxObservedDrawdownPct == null ? '—' : `${a.metrics.maxObservedDrawdownPct.toFixed(2)}%`}<div className="meta">{a.metrics.missingEquitySamples} missing marks</div></td>
           </tr>)}</tbody>
         </table></div>
-        <p className="help">momentum-quality-v1 uses liquidity, pair age, price momentum, buy pressure and recent volume.
-          safety-feed-v1 takes the first eligible coin in feed order. Both use the same entry size, costs and exits.
+        <p className="help">momentum-quality uses liquidity, pair age, price momentum, buy pressure and recent volume.
+          safety-feed takes the first eligible coin in feed order. v2 strategies pay the same priority fee a live swap would; v1 used a smaller fixed fee. Both use the same entry size, costs and exits.
           This is a prospective test of fixed rules; scores are not win probabilities. Closed-trade expectancy excludes open trades;
           net P&amp;L includes fresh marks. Drawdown is sampled and can miss moves during outages. Results are not proof of an edge.</p>
         <details><summary>Latest automatic decisions</summary>

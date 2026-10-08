@@ -2,6 +2,7 @@
  * Jupiter lite-api proxy for Solana ExactIn swaps.
  * Returns quotes and unsigned swap transactions only — never signs.
  */
+import { Keypair } from '@solana/web3.js';
 import { envNumber } from './config.js';
 
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -99,6 +100,23 @@ export async function getSwapTransaction({ quoteResponse, userPublicKey }) {
       prioritizationFeeLamports: 'auto',
     },
   });
+}
+
+// Same ceiling the browser applies before a live swap may be signed (validateSwapTransaction.js).
+export const MAX_PRIORITY_FEE_LAMPORTS = 5_000_000n;
+
+/**
+ * The priority fee Jupiter's "auto" setting would add to a live swap for this quote, in lamports.
+ * The transaction is built for a throwaway public key and discarded: it is never signed or sent.
+ * Fails instead of guessing when Jupiter returns no usable fee.
+ */
+export async function jupiterPriorityFee(quoteResponse, { swap = getSwapTransaction, referenceKey = () => Keypair.generate().publicKey.toBase58() } = {}) {
+  const built = await swap({ quoteResponse, userPublicKey: referenceKey() });
+  const raw = built?.prioritizationFeeLamports;
+  if (!Number.isSafeInteger(raw) || raw < 0 || BigInt(raw) > MAX_PRIORITY_FEE_LAMPORTS) {
+    throw Object.assign(new Error('Jupiter returned no usable priority fee'), { status: 502 });
+  }
+  return String(raw);
 }
 
 export function assertPriceImpactOk(quote) {

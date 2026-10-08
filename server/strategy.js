@@ -1,6 +1,7 @@
-// Frozen research hypotheses, not calibrated win probabilities. Bump versions when rules change.
-export const RANKED_VERSION = 'momentum-quality-v1';
-export const BASELINE_VERSION = 'safety-feed-v1';
+// Frozen research hypotheses, not calibrated win probabilities. Bump versions when rules or the paper cost model change.
+// v2: paper trades pay the live-style priority fee (PAPER_MODEL quote-min-output-v2).
+export const RANKED_VERSION = 'momentum-quality-v2';
+export const BASELINE_VERSION = 'safety-feed-v2';
 export const EXPERIMENT_VERSIONS = [RANKED_VERSION, BASELINE_VERSION];
 export const EXPERIMENT_POLICY = Object.freeze({ amountSol: 0.01, slippageBps: 100, maxPositions: 3,
   cooldownMs: 24 * 3600000, maxSignalAgeMs: 120000, maxEntriesPerScan: 1 });

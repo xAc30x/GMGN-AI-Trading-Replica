@@ -55,7 +55,7 @@ export function automationStatus(now = Date.now()) {
   return { ...saved, intervalMs: SCAN_INTERVAL_MS, policy: EXPERIMENT_POLICY, at: now,
     accounts: saved.accounts.map(a => ({ id: a.id, currentVersion: EXPERIMENT_VERSIONS.includes(a.id), startedAt: a.startedAt, decisionCounts: a.decisionCounts,
       portfolio: paperPortfolio(now, a.id), metrics: metrics[a.id],
-      verdict: strategyVerdict(metrics[a.id], a.id === BASELINE_VERSION ? null : baseline) })),
+      verdict: strategyVerdict(metrics[a.id], a.id === RANKED_VERSION ? baseline : null) })),
   };
 }
 

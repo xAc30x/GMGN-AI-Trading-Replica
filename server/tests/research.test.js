@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { withResearch, recordScan, scanHistory, collectOutcomes, HORIZONS, OUTCOME_GRACE_MS } from '../researchStore.js';
 import { createPaperEngine, paperPortfolio, PAPER_MODEL } from '../paperTrading.js';
-import { SOL_MINT } from '../jupiterSol.js';
+import { SOL_MINT, jupiterPriorityFee, MAX_PRIORITY_FEE_LAMPORTS } from '../jupiterSol.js';
 
 const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
 function setup(t) {
@@ -27,6 +27,8 @@ function fixture(t, options = {}) {
   const calls = [];
   const engineOptions = {
     now: () => at, sleep: async ms => { at += ms; },
+    // 5000 signature fee + 5000 priority fee keeps the per-side fee at 10000 lamports.
+    priorityFee: async () => '5000',
     safety: async () => ({ ok: !blocked, blockers: blocked ? ['Unsafe mint'] : [] }),
     quote: async intent => {
       calls.push({ ...intent, at });
@@ -93,6 +95,77 @@ test('paper accounting persists across engine recreation; quotes are delayed, co
   assert.equal(paperPortfolio(f.time()).account.cash, '997440720');
   assert.equal(paperPortfolio(f.time()).stats.closed, 1);
   assert.equal(paperPortfolio(f.time()).stats.realisedPnlLamports, '-2559280');
+});
+
+test('paper trades pay the live-style priority fee on entry and exit; marks estimate it from the entry', async t => {
+  const fees = [];
+  const f = fixture(t, { priorityFee: async q => {
+    const fee = q.inputMint === SOL_MINT ? '200000' : '300000';
+    fees.push(fee); return fee;
+  } });
+  const opened = await f.engine.open(entry);
+  assert.equal(opened.model.version, 'quote-min-output-v2');
+  assert.equal(opened.entryPriorityFeeLamports, '200000');
+  assert.equal(opened.costLamports, String(50000000 + 5000 + 200000 + 2039280));
+  await f.engine.refresh();
+  const marked = paperPortfolio(f.time()).positions[0];
+  assert.equal(marked.mark.netLamports, String(49500000 - 5000 - 200000));
+  assert.deepEqual(fees, ['200000'], 'marks do not ask Jupiter for a fee');
+  const closed = await f.engine.close(entry.id);
+  assert.equal(closed.exitFeeLamports, '305000');
+  assert.equal(closed.proceedsLamports, String(49500000 - 305000));
+  assert.equal(closed.realisedPnlLamports, String(49500000 - 305000 - 52244280));
+  assert.equal(paperPortfolio(f.time()).account.cash, String(1000000000 - 52244280 + 49195000));
+});
+
+test('a partial sell records the priority fee it paid', async t => {
+  const f = fixture(t, { scaled: true, priorityFee: async q => q.inputMint === SOL_MINT ? '5000' : '45000' });
+  await f.engine.open(entry);
+  const part = await f.engine.sell(entry.id, 50);
+  assert.equal(part.partialExits[0].feeLamports, '50000');
+});
+
+test('positions opened under the fixed-fee v1 model keep that fee and never ask Jupiter', async t => {
+  const v1 = { ...PAPER_MODEL, version: 'quote-min-output-v1', feeLamports: '10000' };
+  delete v1.baseFeeLamports; delete v1.priorityFee;
+  const f = fixture(t, { model: v1, priorityFee: async () => { throw new Error('v1 must not fetch a fee'); } });
+  const opened = await f.engine.open(entry);
+  assert.equal(opened.costLamports, '52049280');
+  // A later engine on the new model still exits the old position with its own fee.
+  const current = createPaperEngine({ ...f.engineOptions, model: PAPER_MODEL });
+  const closed = await current.close(entry.id);
+  assert.equal(closed.proceedsLamports, '49490000');
+});
+
+test('a missing priority fee blocks the entry and retries the exit instead of guessing', async t => {
+  let feeDown = true;
+  const f = fixture(t, { priorityFee: async () => { if (feeDown) throw new Error('Jupiter returned no usable priority fee'); return '5000'; } });
+  await assert.rejects(f.engine.open(entry), /no usable priority fee/);
+  assert.equal(paperPortfolio(f.time()).account.cash, '1000000000');
+  assert.equal(paperPortfolio(f.time()).positions.length, 0);
+  feeDown = false;
+  await f.engine.open(entry);
+  feeDown = true;
+  await assert.rejects(f.engine.close(entry.id), /no usable priority fee/);
+  const stuck = paperPortfolio(f.time()).positions[0];
+  assert.equal(stuck.state, 'open'); assert.equal(stuck.exitPending, 'manual');
+  feeDown = false;
+  await f.engine.refresh();
+  assert.equal(paperPortfolio(f.time()).positions[0].state, 'closed');
+});
+
+test('jupiterPriorityFee reads the fee from a throwaway swap build and refuses unusable values', async () => {
+  const seen = [];
+  const swapWith = value => async request => { seen.push(request); return { prioritizationFeeLamports: value }; };
+  assert.equal(await jupiterPriorityFee({ q: 1 }, { swap: swapWith(123456), referenceKey: () => 'ref' }), '123456');
+  assert.deepEqual(seen[0], { quoteResponse: { q: 1 }, userPublicKey: 'ref' });
+  assert.equal(await jupiterPriorityFee({}, { swap: swapWith(0) }), '0');
+  for (const bad of [undefined, null, '5000', -1, 1.5, Number(MAX_PRIORITY_FEE_LAMPORTS) + 1]) {
+    await assert.rejects(jupiterPriorityFee({}, { swap: swapWith(bad) }), /no usable priority fee/);
+  }
+  // The default reference key is a fresh, valid public key; no secret is kept.
+  await jupiterPriorityFee({}, { swap: swapWith(1) });
+  assert.match(seen.at(-1).userPublicKey, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 });
 
 test('safety failures and invalid fills cannot debit virtual cash', async t => {

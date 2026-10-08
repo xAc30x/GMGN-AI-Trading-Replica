@@ -1,6 +1,7 @@
-// Frozen research hypotheses, not calibrated win probabilities. Bump versions when rules change.
-export const RANKED_VERSION = 'momentum-quality-v1';
-export const BASELINE_VERSION = 'safety-feed-v1';
+// Frozen research hypotheses, not calibrated win probabilities. Bump versions when rules or the paper cost model change.
+// v2: paper trades pay the live-style priority fee (PAPER_MODEL quote-min-output-v2).
+export const RANKED_VERSION = 'momentum-quality-v2';
+export const BASELINE_VERSION = 'safety-feed-v2';
 export const EXPERIMENT_VERSIONS = [RANKED_VERSION, BASELINE_VERSION];
 export const EXPERIMENT_POLICY = Object.freeze({ amountSol: 0.01, slippageBps: 100, maxPositions: 3,
   cooldownMs: 24 * 3600000, maxSignalAgeMs: 120000, maxEntriesPerScan: 1 });
@@ -41,6 +42,9 @@ export function rankCandidates(tokens, at = Date.now()) {
       || (b.ranking.score ?? -1) - (a.ranking.score ?? -1) || a.feedOrder - b.feedOrder);
 }
 
+// Fewer closed trades than this is too small a sample to say anything about a strategy.
+export const MIN_JUDGED_TRADES = 30;
+
 export function tradeMetrics(positions, equityPoints, initial = 1000000000n) {
   const closed = positions.filter(p => p.state === 'closed');
   const values = closed.map(p => Number(p.realisedPnlLamports) / 1e9);
@@ -53,12 +57,35 @@ export function tradeMetrics(positions, equityPoints, initial = 1000000000n) {
     peak = Math.max(peak, value);
     if (peak > 0) drawdown = Math.max(drawdown, (peak - value) / peak * 100);
   }
-  return { closed: closed.length, wins: values.filter(n => n > 0).length,
+  const wins = values.filter(n => n > 0).length;
+  return { closed: closed.length, wins,
+    winRatePct: values.length ? wins / values.length * 100 : null,
     netExpectancySol: values.length ? (gains - losses) / values.length : null,
     profitFactor: losses > 0 ? gains / losses : null,
     noLosingTrades: values.length > 0 && losses === 0,
     maxObservedDrawdownPct: equityPoints.some(p => p.equity !== null) ? drawdown : null,
     equitySamples: equityPoints.filter(p => p.equity !== null).length,
     missingEquitySamples: equityPoints.filter(p => p.equity === null).length,
-    evaluation: closed.length < 30 ? 'Insufficient sample' : 'Prospective paper results; no statistical edge established' };
+    evaluation: closed.length < MIN_JUDGED_TRADES ? 'Insufficient sample' : 'Prospective paper results; no statistical edge established' };
+}
+
+/**
+ * Plain-language summary of a strategy's paper results after costs.
+ * The baseline comparison is only made when both strategies have enough closed trades.
+ */
+export function strategyVerdict(metrics, baseline = null) {
+  if (metrics.closed < MIN_JUDGED_TRADES || metrics.netExpectancySol === null) {
+    return { status: 'too_few', beatsBaseline: null,
+      text: `Too few trades to judge: ${metrics.closed} of ${MIN_JUDGED_TRADES} closed.` };
+  }
+  const comparable = baseline && baseline.closed >= MIN_JUDGED_TRADES && baseline.netExpectancySol !== null;
+  const beatsBaseline = comparable ? metrics.netExpectancySol > baseline.netExpectancySol : null;
+  const versus = beatsBaseline === null ? '' : beatsBaseline
+    ? ' It did better than the plain baseline.' : ' It did no better than the plain baseline.';
+  if (metrics.netExpectancySol <= 0) {
+    return { status: 'losing', beatsBaseline,
+      text: `Losing after costs over ${metrics.closed} trades.${versus}` };
+  }
+  return { status: 'positive', beatsBaseline,
+    text: `Made money on paper after costs over ${metrics.closed} trades. This is not proof it will work with real money.${versus}` };
 }

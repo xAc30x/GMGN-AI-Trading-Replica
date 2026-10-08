@@ -64,16 +64,17 @@ export function ResearchAutomationPanel() {
         <div className="table-wrap" tabIndex={0} role="region" aria-label="Paper strategy comparison"><table className="screen">
           <thead><tr><th>Strategy</th><th>Open / closed</th><th>Net P&amp;L (SOL)</th><th>Expectancy / trade (SOL)</th><th>Profit factor</th><th>Observed drawdown</th></tr></thead>
           <tbody>{data.accounts.map(a => <tr key={a.id}>
-            <td>{a.id}{a.currentVersion === false && <div className="meta">Retired · monitoring existing positions</div>}<div className="meta">{a.metrics.evaluation}</div></td>
-            <td>{a.portfolio.stats.open} / {a.metrics.closed}<div className="meta">{a.metrics.wins} wins</div></td>
+            <td>{a.id}{a.currentVersion === false && <div className="meta">Retired · monitoring existing positions</div>}<div className={`strategy-verdict strategy-verdict-${a.verdict.status}`}>{a.verdict.text}</div>
+              {a.verdict.status !== 'too_few' && <div className="meta">{a.metrics.evaluation}</div>}</td>
+            <td>{a.portfolio.stats.open} / {a.metrics.closed}<div className="meta">{a.metrics.wins} wins{a.metrics.winRatePct == null ? '' : ` (${a.metrics.winRatePct.toFixed(0)}%)`}</div></td>
             <td>{sol(clock - data.at <= 45000 ? a.portfolio.stats.netPnlLamports : null)}<div className="meta">Realized {sol(a.portfolio.stats.realisedPnlLamports)}</div></td>
             <td>{a.metrics.netExpectancySol == null ? '—' : a.metrics.netExpectancySol.toFixed(6)}</td>
             <td>{a.metrics.profitFactor == null ? a.metrics.noLosingTrades ? 'No losses yet' : '—' : a.metrics.profitFactor.toFixed(2)}</td>
             <td>{a.metrics.maxObservedDrawdownPct == null ? '—' : `${a.metrics.maxObservedDrawdownPct.toFixed(2)}%`}<div className="meta">{a.metrics.missingEquitySamples} missing marks</div></td>
           </tr>)}</tbody>
         </table></div>
-        <p className="help">momentum-quality-v1 uses liquidity, pair age, price momentum, buy pressure and recent volume.
-          safety-feed-v1 takes the first eligible coin in feed order. Both use the same entry size, costs and exits.
+        <p className="help">momentum-quality uses liquidity, pair age, price momentum, buy pressure and recent volume.
+          safety-feed takes the first eligible coin in feed order. v2 strategies pay the same priority fee a live swap would; v1 used a smaller fixed fee. Both use the same entry size, costs and exits.
           This is a prospective test of fixed rules; scores are not win probabilities. Closed-trade expectancy excludes open trades;
           net P&amp;L includes fresh marks. Drawdown is sampled and can miss moves during outages. Results are not proof of an edge.</p>
         <details><summary>Latest automatic decisions</summary>

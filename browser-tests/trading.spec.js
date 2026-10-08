@@ -125,7 +125,7 @@ async function installApiFixtures(page, scenario = {}) {
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
     account: { initial: '1000000000', cash: paperPosition ? '987950720' : '1000000000' },
-    model: { latencyMs: 1000, feeLamports: '10000', entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000 },
+    model: { version: 'quote-min-output-v2', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto', entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000 },
     positions: paperPosition ? [paperPosition] : [],
     stats: { open: paperPosition?.state === 'open' ? 1 : 0, closed: paperPosition?.state === 'closed' ? 1 : 0, wins: 0,
       realisedPnlLamports: paperPosition?.realisedPnlLamports || '0', equityLamports: null, netPnlLamports: null },
@@ -142,11 +142,22 @@ async function installApiFixtures(page, scenario = {}) {
         settings: researchSettings, serviceEnabled: true, schedulerError: null, intervalMs: 120000, at: Date.now(),
         policy: { amountSol: 0.01, maxPositions: 3, cooldownMs: 86400000 },
         jobs: [{ source: 'trending', next_at: Date.now() + 120000, lease_until: 0, last_at: Date.now(), failures: 0, last_error: null }],
-        accounts: ['momentum-quality-v1', 'safety-feed-v1'].map(id => ({ id, startedAt: Date.now(),
+        accounts: ['momentum-quality-v2', 'safety-feed-v2'].map(id => ({ id, startedAt: Date.now(),
           portfolio: { ...paperPortfolio(), positions: [], stats: { ...paperPortfolio().stats, open: 0, closed: 0, realisedPnlLamports: '0', netPnlLamports: '0' } },
-          decisionCounts: [], metrics: { closed: 0, wins: 0, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
-            maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' } })), decisions: [],
+          decisionCounts: [], metrics: { closed: 0, wins: 0, winRatePct: null, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
+            maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' },
+          verdict: { status: 'too_few', beatsBaseline: null, text: 'Too few trades to judge: 0 of 30 closed.' } })), decisions: [],
       } });
+    }
+    if (url.pathname === '/api/live/trades') {
+      const mint = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+      return route.fulfill({ json: { ok: true, trades: [{}, {}],
+        positions: [{ mint, wallet: 'w', heldAtomic: '500', costLamports: '6000000', boughtLamports: '12000000', soldLamports: '5000000',
+          feesLamports: '10000', realisedPnlLamports: '-1000000', trades: 2, failed: 0 }],
+        totals: { realisedPnlLamports: '-1000000', feesLamports: '10000', openCostLamports: '6000000' },
+        sync: { stored: 0, waiting: 0, error: null },
+        dailyLoss: { dayStart: 0, resetsAt: 86400000, realisedTodayLamports: '-1000000', lossTodayLamports: '1000000',
+          limitLamports: '50000000', blocked: false } } });
     }
     if (url.pathname === '/api/paper/portfolio' || url.pathname === '/api/paper/refresh') return route.fulfill({ json: paperPortfolio() });
     if (url.pathname === '/api/research/scans') return route.fulfill({ json: { totals: { observations: 1, eligible: 0, blocked: 1 }, outcomeCounts: [], rows: [{
@@ -203,7 +214,7 @@ async function installApiFixtures(page, scenario = {}) {
     }
     if (url.pathname === '/api/sol/position-values') {
       return route.fulfill({ json: { ok: true, results: body.items.map(item => ({ ...item, ok: true,
-        outLamports: '20000000', priceImpactPct: '0.001', quotedAt: Date.now(), stale: Boolean(scenario.stale) })), at: Date.now() } });
+        outLamports: scenario.outLamports ?? '20000000', priceImpactPct: '0.001', quotedAt: Date.now(), stale: Boolean(scenario.stale) })), at: Date.now() } });
     }
     if (url.pathname === '/api/sol/prices') {
       return route.fulfill({ json: { ok: true, prices: { [mintText]: 0.002 }, solUsd: 100, at: Date.now() } });
@@ -439,6 +450,31 @@ test('LIVE partial sell is wallet-signed, keeps the holding with a smaller cost,
   assert.equal(counts.sends, 3);
 });
 
+test('a live holding past its stop-loss shows an alert whose sell still goes through the wallet', async ({ page }) => {
+  const scenario = { outLamports: '7000000' }; // bought for 0.01 SOL, now worth 0.007 SOL: -30%
+  const counts = await installApiFixtures(page, scenario);
+  await openLiveTrade(page);
+  await page.getByRole('button', { name: 'Sign SOL swap in wallet' }).click();
+  await expect(page.getByText(/Confirmed:/)).toBeVisible({ timeout: 10_000 });
+  const holdings = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tracked holdings' }) });
+  const alert = holdings.getByRole('alert');
+  await expect(alert).toContainText('TEST: Stop-loss reached (-20%): -30.0% by sell-now quote.');
+  await expect(page).toHaveTitle(/^\(1\) Exit alert · /);
+  await page.getByRole('dialog', { name: /One-Click Buy/ }).getByRole('button', { name: 'Close' }).click();
+  await holdings.screenshot({ path: '/tmp/gmgn-exit-alert.png' });
+  // Moving the level past the loss clears the alert; the choice is remembered.
+  await holdings.getByLabel('Stop-loss alert').selectOption('-50');
+  await expect(alert).toHaveCount(0);
+  await expect(page).not.toHaveTitle(/Exit alert/);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gmgn.exitAlertRules.v1')).stopLossPct), -50);
+  await holdings.getByLabel('Stop-loss alert').selectOption('-20');
+  assert.equal(counts.closeBuilds.length, 0, 'an alert never sells on its own');
+  await alert.getByRole('button', { name: 'Sell all (wallet will ask)' }).click();
+  await expect(page.getByText(/SOL wallet close TEST · tx/).first()).toBeVisible({ timeout: 10_000 });
+  assert.deepEqual(counts.closeBuilds, [100]);
+  assert.equal(await page.evaluate(() => window.__walletSignCalls), 2);
+});
+
 test('holdings show cached valuation and hide zero balances without deleting trade history', async ({ page }) => {
   await page.clock.install();
   const scenario = { stale: true, zeroBalance: false };
@@ -512,8 +548,14 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await page.getByRole('button', { name: 'Research', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('cell', { name: /momentum-quality-v1/ })).toBeVisible();
-  await expect(panel.getByRole('cell', { name: /safety-feed-v1/ })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /momentum-quality-v2/ })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /safety-feed-v2/ })).toBeVisible();
+  await expect(panel.getByText('Too few trades to judge: 0 of 30 closed.', { exact: true })).toHaveCount(2);
+  const record = page.getByRole('region', { name: 'Live trade record', exact: true });
+  await expect(record.getByText('-0.001000 SOL').first()).toBeVisible();
+  await expect(record.getByRole('cell', { name: 'DezXAZ…' })).toBeVisible();
+  await expect(record.getByText(/Daily loss limit: 0\.001000 of 0\.050000 SOL lost today/)).toBeVisible();
+  await record.screenshot({ path: '/tmp/gmgn-live-record.png' });
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
   await page.getByRole('button', { name: 'Trade', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Discover', exact: true }).getByText('watch · 20/100', { exact: true })).toBeVisible();

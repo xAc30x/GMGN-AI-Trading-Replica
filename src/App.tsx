@@ -25,6 +25,7 @@ import { StatusBar } from './components/StatusBar';
 import type { InspectTarget } from './safetyChecks';
 import { ResearchPanel } from './components/ResearchPanel';
 import { ResearchAutomationPanel } from './components/ResearchAutomationPanel';
+import { LiveTradeRecord } from './components/LiveTradeRecord';
 import { useLivePnl } from './useLivePnl';
 import { addWatchMint } from './watchlist';
 import { SettingsModal } from './components/SettingsModal';
@@ -441,6 +442,7 @@ export default function App({ account }: { account: Account }) {
               <>
                 <ResearchAutomationPanel />
                 <ResearchPanel version={paperVersion} />
+                <LiveTradeRecord />
               </>
             ) : (
               <section className="panel">

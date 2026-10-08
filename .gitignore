@@ -40,5 +40,6 @@ test-results
 
 server/.research.sqlite*
 server/.auth.sqlite*
+server/.live-trades.sqlite*
 # Apple sign-in keys — never commit
 *.p8

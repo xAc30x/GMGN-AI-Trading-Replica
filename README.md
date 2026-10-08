@@ -20,12 +20,13 @@ This process **never** stores or uses `GMGN_PRIVATE_KEY`.
 3. Every `/api` route except sign-in needs a signed-in account (see **Sign-in**), and `X-GMGN-Token` (from `GMGN_LOCAL_TOKEN` in `server/.env`) is still required on top for credentials and LIVE routes
 4. Spend cap: `GMGN_MAX_NATIVE_AMOUNT` (default **0.05 SOL**)
 5. Aggregate tracked exposure cap: `GMGN_MAX_PORTFOLIO_SOL` (default **0.1 SOL**) and `GMGN_MAX_OPEN_POSITIONS` (default **5**)
-6. Slippage ceiling: `GMGN_MAX_SLIPPAGE_BPS` (default **300** = 3%)
-7. Demo/placeholder mints denylisted; buy field starts empty; re-type CA
-8. `/api/swap` and `/api/close` (gmgn-cli) return **410**
-9. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
-10. SL/TP text is **not** placed on-chain
-11. SHADOW metrics and wallet evaluation are **mock**; PAPER/LIVE discovery and holdings use provider data
+6. Daily loss limit: `GMGN_MAX_DAILY_LOSS_SOL` (default **0.05 SOL**). Once today's realised LIVE loss (sells against average cost, plus fees of failed transactions; see **Live trade record**) reaches it, new LIVE buys are refused until 00:00 UTC. Buys are also refused while the record cannot be checked. Selling is never blocked. Losses on tokens still held are not counted until they are sold.
+7. Slippage ceiling: `GMGN_MAX_SLIPPAGE_BPS` (default **300** = 3%)
+8. Demo/placeholder mints denylisted; buy field starts empty; re-type CA
+9. `/api/swap` and `/api/close` (gmgn-cli) return **410**
+10. SOL path: `/api/sol/quote` + `/api/sol/swap-tx` return unsigned tx only
+11. SL/TP text is **not** placed on-chain. Tracked holdings show stop-loss / profit-target **alerts** (default -20% / +30%, changeable there) while the tab is open; a sale still needs the normal sell button and wallet approval
+12. SHADOW metrics and wallet evaluation are **mock**; PAPER/LIVE discovery and holdings use provider data
 
 ## Run
 
@@ -272,6 +273,16 @@ validator, default-off broadcast gate, durable reservations, and signature recon
 
 The original replica and audit worktrees remain available; their execution-path
 variants were not merged over the release safeguards.
+
+## Live trade record
+
+After a LIVE trade is sent, the server reads the confirmed transaction back from the
+Solana RPC and saves what actually happened to the wallet in `server/.live-trades.sqlite`
+(override with `GMGN_LIVE_TRADES_PATH`): all SOL spent or received, including network
+fees and new token account rent, and the token amount. Failed transactions are saved
+too, because their fees were still paid. The Research tab shows the totals per token
+using average cost. This record is read-only: it never builds, signs or sends anything.
+The file is permissioned to 0600 and excluded from Git; back it up with the others.
 
 ## Persistent research and paper portfolio
 

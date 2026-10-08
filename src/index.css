@@ -2240,6 +2240,9 @@ table.screen tr:hover td {
 .research-decisions { padding-left: 20px; font-size: 12px; line-height: 1.7; }
 .research-decisions li { margin-bottom: 8px; }
 .automation-panel table.screen { min-width: 800px; }
+.strategy-verdict { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.strategy-verdict-losing { color: var(--red); }
+.strategy-verdict-positive { color: var(--lime); }
 
 /* In the workspace the primary action takes the mode color; lime only means "check passed". */
 .workspace .buy-btn:not(:disabled) {
@@ -3190,3 +3193,11 @@ html {
   border-color: var(--lime-dim);
   background: var(--lime-glow);
 }
+
+/* Live exit alerts in Tracked holdings. */
+.exit-rules { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
+.exit-rules select { background: var(--bg-card-2); color: var(--text); border: 1px solid var(--border-soft); border-radius: 4px; padding: 2px 4px; }
+.exit-alert { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  margin-top: 6px; padding: 6px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.exit-alert-stop_loss { color: var(--red); background: rgba(232, 90, 74, 0.08); border: 1px solid var(--red-dim); }
+.exit-alert-take_profit { color: var(--lime); background: var(--lime-glow); border: 1px solid var(--lime-dim); }

@@ -52,7 +52,8 @@ export function ResearchPanel({ version }: { version: number }) {
           <span>Closed <strong>{portfolio.stats.closed}</strong></span><span>Wins <strong>{portfolio.stats.wins}</strong></span>
         </div>
         <p className="help">Starting cash {sol(portfolio.account.initial)} SOL. Assumptions: {portfolio.model.latencyMs / 1000}s delay,
-          quote minimum output on both sides, {sol(portfolio.model.feeLamports)} SOL fee per side,
+          quote minimum output on both sides, a {sol(portfolio.model.baseFeeLamports)} SOL network fee per side plus the priority fee
+          Jupiter would charge a live swap at that moment,
           {` ${sol(portfolio.model.entryRentLamports)}`} SOL entry rent (no refund modeled).
           Sell buttons sell that share of the tokens still held; each sale pays the fee. Automatic full exits: stop {portfolio.model.stopLossPct}%, target +{portfolio.model.takeProfitPct}%, time {portfolio.model.maxHoldMs / 60000}m.
           Stops are checked about every 15s while the backend runs; fills can pass the threshold. These defaults are unvalidated.</p>

@@ -8,7 +8,7 @@ import { withResearch } from '../researchStore.js';
 import { createDiscoveryScanner } from '../discoveryScanner.js';
 import { createPaperEngine, paperPortfolio } from '../paperTrading.js';
 import { createResearchAutomation, researchSettings, updateResearchSettings, automationStatus, ensureExperiments, LEASE_MS } from '../researchAutomation.js';
-import { scoreOpportunity, rankCandidates, tradeMetrics, RANKED_VERSION, BASELINE_VERSION } from '../strategy.js';
+import { scoreOpportunity, rankCandidates, tradeMetrics, strategyVerdict, MIN_JUDGED_TRADES, RANKED_VERSION, BASELINE_VERSION } from '../strategy.js';
 import { SOL_MINT } from '../jupiterSol.js';
 
 function temporary(t) {
@@ -37,7 +37,7 @@ function fixture(t, options = {}) {
   const scan = createDiscoveryScanner({ now, minLiquidity: 1000,
     discover: async () => { scans++; return [weak, strong]; }, safety: async () => ({ ok: true }) });
   const params = { scan, now, enabled: () => enabled, intervalMs: 120000,
-    engineOptions: { quote, safety: async () => ({ ok: true }), sleep: async () => {} }, ...options };
+    engineOptions: { quote, priorityFee: async () => '5000', safety: async () => ({ ok: true }), sleep: async () => {} }, ...options };
   return { runner: createResearchAutomation(params), params, quote, now,
     advance: n => { at += n; }, enable: value => { enabled = value; }, scans: () => scans,
     sell: value => { sell = value; } };
@@ -177,6 +177,49 @@ test('net expectancy, profit factor and sampled drawdown handle losses and missi
   assert.equal(result.closed, 2); assert.equal(result.evaluation, 'Insufficient sample');
   assert.equal(tradeMetrics([], []).netExpectancySol, null);
   assert.equal(tradeMetrics([{ state: 'closed', realisedPnlLamports: '100' }], []).profitFactor, null);
+});
+
+test('win rate counts only closed trades', () => {
+  const result = tradeMetrics([
+    { state: 'closed', realisedPnlLamports: '5' }, { state: 'closed', realisedPnlLamports: '-5' },
+    { state: 'closed', realisedPnlLamports: '0' }, { state: 'closed', realisedPnlLamports: '7' },
+    { state: 'open', realisedPnlLamports: '9' },
+  ], []);
+  assert.equal(result.winRatePct, 50);
+  assert.equal(tradeMetrics([], []).winRatePct, null);
+});
+
+test('the verdict refuses to judge small samples and never calls a loss a win', () => {
+  const closed = (n, pnl) => Array.from({ length: n }, () => ({ state: 'closed', realisedPnlLamports: String(pnl) }));
+  const few = strategyVerdict(tradeMetrics(closed(MIN_JUDGED_TRADES - 1, 1000000), []));
+  assert.equal(few.status, 'too_few'); assert.match(few.text, /29 of 30/); assert.equal(few.beatsBaseline, null);
+
+  const losing = strategyVerdict(tradeMetrics(closed(MIN_JUDGED_TRADES, -1000), []));
+  assert.equal(losing.status, 'losing');
+  const flat = strategyVerdict(tradeMetrics(closed(MIN_JUDGED_TRADES, 0), []));
+  assert.equal(flat.status, 'losing', 'zero after costs is not a profit');
+
+  const positive = strategyVerdict(tradeMetrics(closed(MIN_JUDGED_TRADES, 1000), []));
+  assert.equal(positive.status, 'positive'); assert.match(positive.text, /not proof/);
+  assert.equal(positive.beatsBaseline, null, 'no baseline, no comparison');
+});
+
+test('the baseline comparison needs enough trades on both sides', () => {
+  const closed = (n, pnl) => Array.from({ length: n }, () => ({ state: 'closed', realisedPnlLamports: String(pnl) }));
+  const ranked = tradeMetrics(closed(MIN_JUDGED_TRADES, 2000), []);
+  assert.equal(strategyVerdict(ranked, tradeMetrics(closed(5, 1000), [])).beatsBaseline, null);
+  assert.equal(strategyVerdict(ranked, tradeMetrics(closed(MIN_JUDGED_TRADES, 1000), [])).beatsBaseline, true);
+  const worse = strategyVerdict(ranked, tradeMetrics(closed(MIN_JUDGED_TRADES, 3000), []));
+  assert.equal(worse.beatsBaseline, false); assert.match(worse.text, /no better than the plain baseline/);
+});
+
+test('automation status gives each strategy a verdict and compares only the ranked one', t => {
+  temporary(t);
+  const status = automationStatus(1);
+  const ranked = status.accounts.find(a => a.id === RANKED_VERSION);
+  const baseline = status.accounts.find(a => a.id === BASELINE_VERSION);
+  assert.equal(ranked.verdict.status, 'too_few'); assert.equal(baseline.verdict.status, 'too_few');
+  assert.match(ranked.verdict.text, /0 of 30/);
 });
 
 test('experiment manifests are immutable and invalid settings cannot enable execution', t => {

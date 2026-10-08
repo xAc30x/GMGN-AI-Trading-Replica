@@ -1,11 +1,17 @@
 import { withResearch, transaction } from './researchStore.js';
-import { SOL_MINT, getQuote, assertQuoteMatches, solToLamports, clampSlippageBps } from './jupiterSol.js';
+import { SOL_MINT, getQuote, assertQuoteMatches, solToLamports, clampSlippageBps, jupiterPriorityFee } from './jupiterSol.js';
 import { assessMint } from './mintSafety.js';
 
+// v2 charges each side the 5000-lamport signature fee plus the priority fee Jupiter would set for
+// that live swap. v1 positions (fixed feeLamports per side) keep their original fee when they exit.
 export const PAPER_MODEL = Object.freeze({
-  version: 'quote-min-output-v1', latencyMs: 1000, feeLamports: '10000',
+  version: 'quote-min-output-v2', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto',
   entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000,
 });
+const usesFixedFee = model => model.feeLamports !== undefined;
+/** Network fee for one side of a trade: the fixed v1 fee, or the signature fee plus a priority fee. */
+const sideFee = (model, priorityFeeLamports) => usesFixedFee(model)
+  ? BigInt(model.feeLamports) : BigInt(model.baseFeeLamports) + BigInt(priorityFeeLamports);
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const event = (db, at, id, kind, data, accountId) => db.prepare('INSERT INTO paper_events (at, position_id, kind, data, account_id) VALUES (?, ?, ?, ?, ?)')
   .run(at, id, kind, JSON.stringify(data), accountId);
@@ -46,7 +52,7 @@ export function paperPortfolio(now = Date.now(), accountId = 'manual') {
   });
 }
 
-export function createPaperEngine({ quote = getQuote, safety = assessMint, now = () => Date.now(),
+export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPriorityFee, safety = assessMint, now = () => Date.now(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), maxAmount = () => 0.05,
   model = PAPER_MODEL, accountId = 'manual', maxPositions = 5, cooldownMs = 0, canOpen = () => true } = {}) {
   const recordEvent = (db, at, id, kind, data) => event(db, at, id, kind, data, accountId);
@@ -59,6 +65,10 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
     assertQuoteMatches(q, intent);
     return q;
   }
+  // Fee for selling this quote now; v1 positions never ask Jupiter.
+  const exitFee = async (p, q) => sideFee(p.model, usesFixedFee(p.model) ? '0' : await priorityFee(q));
+  // Marks run every few seconds, so they estimate the exit fee from the entry's priority fee.
+  const estimatedExitFee = p => sideFee(p.model, p.entryPriorityFeeLamports ?? '0');
 
   async function open({ id, mint, symbol, amount, slippageBps, observationId, selection }) {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{12,128}$/.test(id)) fail('A stable paper request id is required');
@@ -78,7 +88,8 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
       if (!assessment.ok) fail(`Paper entry blocked: ${assessment.blockers?.[0] || 'safety check failed'}`);
       await sleep(model.latencyMs);
       const q = await freshQuote(SOL_MINT, mint, String(lamports), slip);
-      const cost = lamports + BigInt(model.feeLamports) + BigInt(model.entryRentLamports);
+      const entryPriorityFee = usesFixedFee(model) ? '0' : await priorityFee(q);
+      const cost = lamports + sideFee(model, entryPriorityFee) + BigInt(model.entryRentLamports);
       return withResearch(db => transaction(db, () => {
         const duplicate = readPosition(db, id, accountId);
         if (duplicate) {
@@ -94,7 +105,7 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
         const observation = db.prepare('SELECT id FROM observations WHERE mint=? AND at<=? ORDER BY at DESC LIMIT 1').get(mint, requestedAt);
         const p = { id, accountId, selection: selection ?? null, fingerprint, mint, symbol: String(symbol || mint.slice(0, 6)).slice(0, 16), state: 'open',
           requestedAt, openedAt: now(), amountLamports: String(lamports), costLamports: String(cost),
-          quantityAtomic: q.otherAmountThreshold, slippageBps: slip, model: { ...model },
+          quantityAtomic: q.otherAmountThreshold, slippageBps: slip, model: { ...model }, entryPriorityFeeLamports: entryPriorityFee,
           observationId: observationId ?? observation?.id ?? null, entryQuote: q, entrySafety: assessment,
           mark: null, lastError: null, exitPending: null };
         db.prepare('INSERT INTO paper_positions (id, mint, state, created_at, data, account_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, mint, 'open', p.openedAt, JSON.stringify(p), accountId);
@@ -124,7 +135,8 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
       try {
         await sleep(p.model.latencyMs);
         const q = await freshQuote(p.mint, SOL_MINT, p.quantityAtomic, p.slippageBps);
-        const net = BigInt(q.otherAmountThreshold) - BigInt(p.model.feeLamports);
+        const fee = await exitFee(p, q);
+        const net = BigInt(q.otherAmountThreshold) - fee;
         return withResearch(db => transaction(db, () => {
           const current = readPosition(db, id, accountId);
           if (current.state === 'closed') return current;
@@ -134,7 +146,7 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
           const priorProceeds = BigInt(current.proceedsLamports ?? '0');
           const priorRealised = BigInt(current.realisedPnlLamports ?? '0');
           Object.assign(current, { state: 'closed', closedAt: now(), exitReason: current.exitPending,
-            exitQuote: q, proceedsLamports: String(priorProceeds + net),
+            exitQuote: q, exitFeeLamports: String(fee), proceedsLamports: String(priorProceeds + net),
             realisedPnlLamports: String(priorRealised + net - BigInt(current.costLamports)),
             exitPending: null, lastError: null });
           save(db, current);
@@ -175,7 +187,8 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
       if (sellAtomic <= 0n) fail('Sell amount rounds to zero');
       await sleep(p.model.latencyMs);
       const q = await freshQuote(p.mint, SOL_MINT, String(sellAtomic), p.slippageBps);
-      const net = BigInt(q.otherAmountThreshold) - BigInt(p.model.feeLamports);
+      const fee = await exitFee(p, q);
+      const net = BigInt(q.otherAmountThreshold) - fee;
       if (net <= 0n) fail('Sale is too small to cover the modeled network fee');
       return withResearch(db => transaction(db, () => {
         const current = readPosition(db, id, accountId);
@@ -192,7 +205,7 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
           proceedsLamports: String(BigInt(current.proceedsLamports ?? '0') + net),
           realisedPnlLamports: String(BigInt(current.realisedPnlLamports ?? '0') + pnl),
           partialExits: [...(current.partialExits ?? []), { at: now(), percent, quantityAtomic: String(sellAtomic),
-            proceedsLamports: String(net), realisedPnlLamports: String(pnl), quote: q }],
+            proceedsLamports: String(net), feeLamports: String(fee), realisedPnlLamports: String(pnl), quote: q }],
           // The previous mark valued the old size; equity stays unknown until the next refresh.
           mark: null, lastError: null,
         });
@@ -213,7 +226,7 @@ export function createPaperEngine({ quote = getQuote, safety = assessMint, now =
       try {
         if (p.exitPending) { await close(p.id, p.exitPending); continue; }
         const q = await freshQuote(p.mint, SOL_MINT, p.quantityAtomic, p.slippageBps);
-        const net = BigInt(q.otherAmountThreshold) - BigInt(p.model.feeLamports);
+        const net = BigInt(q.otherAmountThreshold) - estimatedExitFee(p);
         const pnlPct = Number(net - BigInt(p.costLamports)) / Number(p.costLamports) * 100;
         withResearch(db => transaction(db, () => {
           const current = readPosition(db, p.id, accountId);

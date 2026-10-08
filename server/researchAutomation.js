@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { envNumber } from './config.js';
 import { withResearch, transaction } from './researchStore.js';
 import { createPaperEngine, paperPortfolio, PAPER_MODEL } from './paperTrading.js';
-import { RANKED_VERSION, EXPERIMENT_VERSIONS, EXPERIMENT_POLICY, RANKING_RULES, tradeMetrics } from './strategy.js';
+import { RANKED_VERSION, BASELINE_VERSION, EXPERIMENT_VERSIONS, EXPERIMENT_POLICY, RANKING_RULES, tradeMetrics, strategyVerdict } from './strategy.js';
 
 export const SCAN_INTERVAL_MS = envNumber('GMGN_RESEARCH_SCAN_SECONDS', 120, { min: 60, max: 3600, integer: true }) * 1000;
 export const LEASE_MS = 300000;
@@ -50,9 +50,12 @@ export function automationStatus(now = Date.now()) {
       decisionCounts: db.prepare('SELECT status, COUNT(*) AS count FROM strategy_decisions WHERE account_id=? GROUP BY status').all(account.id),
     })),
   }));
+  const metrics = Object.fromEntries(saved.accounts.map(a => [a.id, tradeMetrics(a.positions, a.equity)]));
+  const baseline = metrics[BASELINE_VERSION] ?? null;
   return { ...saved, intervalMs: SCAN_INTERVAL_MS, policy: EXPERIMENT_POLICY, at: now,
     accounts: saved.accounts.map(a => ({ id: a.id, currentVersion: EXPERIMENT_VERSIONS.includes(a.id), startedAt: a.startedAt, decisionCounts: a.decisionCounts,
-      portfolio: paperPortfolio(now, a.id), metrics: tradeMetrics(a.positions, a.equity) })),
+      portfolio: paperPortfolio(now, a.id), metrics: metrics[a.id],
+      verdict: strategyVerdict(metrics[a.id], a.id === RANKED_VERSION ? baseline : null) })),
   };
 }
 

@@ -123,7 +123,8 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
           else if (rpc.method === 'getBlockHeight') result = blockHeight;
           else if (rpc.method === 'getSignatureStatuses') {
             result = { context: { slot: 1 }, value: rpc.params[0].map(() => null) };
-          } else throw new Error(`Unexpected fixture RPC method: ${rpc.method}`);
+          } else if (rpc.method === 'getTransaction') result = null; // This fixture never lands a transaction.
+          else throw new Error(`Unexpected fixture RPC method: ${rpc.method}`);
           return send({ jsonrpc: '2.0', id: rpc.id, result });
         }
         if (url.pathname === '/jupiter/quote') {
@@ -182,6 +183,7 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     const id = ++sequence;
     setEnv('GMGN_TRADE_LEDGER_PATH', path.join(directory, `broadcast-${id}.json`));
     setEnv('GMGN_PORTFOLIO_LEDGER_PATH', path.join(directory, `portfolio-${id}.sqlite`));
+    setEnv('GMGN_LIVE_TRADES_PATH', path.join(directory, `live-trades-${id}.sqlite`));
     wallet = Keypair.generate();
     tradeId = `broadcast-safety-${id}-original`;
     sends = [];

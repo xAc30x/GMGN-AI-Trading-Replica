@@ -381,7 +381,7 @@ export interface PaperPosition {
 }
 export interface PaperPortfolioResponse {
   account: { initial: string; cash: string };
-  model: { latencyMs: number; feeLamports: string; entryRentLamports: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
+  model: { version: string; latencyMs: number; baseFeeLamports: string; priorityFee: 'jupiter-auto'; entryRentLamports: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
   positions: PaperPosition[];
   stats: { open: number; closed: number; wins: number; realisedPnlLamports: string; equityLamports: string | null; netPnlLamports: string | null };
   workerError: string | null; monitoringEnabled: boolean; at: number;
@@ -412,11 +412,30 @@ export interface ResearchAutomationResponse {
   jobs: { source: string; next_at: number; lease_until: number; failures: number; last_at: number | null; last_error: string | null }[];
   accounts: { id: string; currentVersion?: boolean; startedAt: number; portfolio: PaperPortfolioResponse;
     decisionCounts: { status: string; count: number }[];
-    metrics: { closed: number; wins: number; netExpectancySol: number | null; profitFactor: number | null;
-      noLosingTrades: boolean; maxObservedDrawdownPct: number | null; missingEquitySamples: number; evaluation: string } }[];
+    metrics: { closed: number; wins: number; winRatePct: number | null; netExpectancySol: number | null; profitFactor: number | null;
+      noLosingTrades: boolean; maxObservedDrawdownPct: number | null; missingEquitySamples: number; evaluation: string };
+    verdict: { status: 'too_few' | 'losing' | 'positive'; beatsBaseline: boolean | null; text: string } }[];
   decisions: { id: string; account_id: string; at: number; mint: string | null; status: string;
     data: { source: string; selectionReason?: string; reason?: string | null; error?: string | null; ranking?: OpportunityRanking | null } }[];
 }
 export const fetchResearchAutomation = () => jsonFetch<ResearchAutomationResponse>('/api/research/automation');
 export const updateResearchAutomation = (settings: Partial<ResearchAutomationResponse['settings']>) =>
   jsonFetch('/api/research/automation', { method: 'POST', body: JSON.stringify(settings) });
+
+export interface LiveTradeRow {
+  tradeId: string; signature: string; wallet: string; mint: string; side: 'buy' | 'close';
+  status: 'confirmed' | 'failed'; slot: number; blockTime: number | null;
+  solDeltaLamports: string; tokenDeltaAtomic: string; feeLamports: string; recordedAt: number;
+}
+export interface LiveTradePosition {
+  mint: string; wallet: string; heldAtomic: string; costLamports: string; boughtLamports: string; soldLamports: string;
+  feesLamports: string; realisedPnlLamports: string; trades: number; failed: number;
+}
+export interface LiveTradeRecordResponse {
+  trades: LiveTradeRow[]; positions: LiveTradePosition[];
+  totals: { realisedPnlLamports: string; feesLamports: string; openCostLamports: string };
+  sync: { stored: number; waiting: number; error: string | null };
+  dailyLoss: { dayStart: number; resetsAt: number; realisedTodayLamports: string; lossTodayLamports: string;
+    limitLamports: string; blocked: boolean };
+}
+export const fetchLiveTradeRecord = () => jsonFetch<LiveTradeRecordResponse>('/api/live/trades');

@@ -80,6 +80,7 @@ If both providers are unavailable or return invalid data, LIVE fails closed (exc
 | POST | `/api/sol/watchlist-scan` | Batch mint-safety for up to 8 watchlist mints |
 | POST | `/api/sol/swap-tx` | Unsigned buy (SOL→mint); mint safety + impact gate |
 | POST | `/api/sol/close-tx` | Unsigned sell (mint→SOL); wallet signs |
+| POST | `/api/sol/reclaim-tx` | Unsigned close of the wallet's empty token accounts for one mint; rent returns to the wallet; wallet signs |
 
 ## Sign-in
 
@@ -283,6 +284,14 @@ fees and new token account rent, and the token amount. Failed transactions are s
 too, because their fees were still paid. The Research tab shows the totals per token
 using average cost. This record is read-only: it never builds, signs or sends anything.
 The file is permissioned to 0600 and excluded from Git; back it up with the others.
+
+Buying a token creates a token account that holds about 0.002 SOL of rent. Selling
+everything leaves that account empty, and the rent stays locked until the account is
+closed. `/api/sol/reclaim-tx` builds that close: only accounts the chain reports as the
+wallet's, with zero tokens, not frozen, not wrapped SOL and closable by the wallet are
+included, and the rent goes back to the same wallet. It passes through the same trade
+ledger as swaps, so only the unchanged build can be broadcast. The record counts the
+returned rent as realised P&L, which also lowers today's loss for the daily limit.
 
 ## Persistent research and paper portfolio
 

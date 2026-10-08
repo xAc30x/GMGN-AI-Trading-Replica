@@ -58,7 +58,7 @@ const close = server => new Promise(resolve => {
 
 describe('broadcast-boundary safety acceptance — isolated fixtures only', { concurrency: false }, () => {
   let directory, fixture, application, session, wallet, tradeId, sequence = 0;
-  let blockHeight = 1, responseKind = 'normal';
+  let blockHeight = 1, responseKind = 'normal', heldAmount = '10000';
   let sends = [], fixtureErrors = [], deniedConnections = [], loseNextResponse = false;
   const savedEnv = new Map();
   const allowedPorts = new Set();
@@ -116,9 +116,11 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
               pubkey: SOL, account: { executable: false, lamports: 1, owner: SPL.toBase58(), rentEpoch: 0,
                 data: { program: 'spl-token', space: 165, parsed: { type: 'account', info: {
                   mint: MINT, owner: wallet.publicKey.toBase58(),
-                  tokenAmount: { amount: '10000', decimals: 6, uiAmount: 0.01, uiAmountString: '0.01' },
+                  state: 'initialized', isNative: false, tokenAmount: { amount: heldAmount, decimals: 6 },
                 } } } },
             }] : [] };
+          } else if (rpc.method === 'getLatestBlockhash') {
+            result = { context: { slot: 1 }, value: { blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 100 } };
           } else if (rpc.method === 'getSlot') result = 1;
           else if (rpc.method === 'getBlockHeight') result = blockHeight;
           else if (rpc.method === 'getSignatureStatuses') {
@@ -188,6 +190,7 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     tradeId = `broadcast-safety-${id}-original`;
     sends = [];
     blockHeight = 1;
+    heldAmount = '10000';
     responseKind = 'normal';
     loseNextResponse = false;
   });
@@ -369,6 +372,36 @@ describe('broadcast-boundary safety acceptance — isolated fixtures only', { co
     assertRejectedWithoutSend(await broadcast(sign(built.body, message => {
       message.instructions[0].data.writeBigUInt64LE(101n, 16);
     })));
+  });
+  const reclaim = (body = {}) => request('/api/sol/reclaim-tx', { mint: MINT,
+    userPublicKey: wallet.publicKey.toBase58(), tradeId, confirm: true, mode: 'LIVE', ...body });
+  test('an authorized reclaim of an empty account forwards once and its retry is cached', async () => {
+    heldAmount = '0';
+    const built = await reclaim();
+    assert.equal(built.status, 200, JSON.stringify(built));
+    assert.equal(built.body.refundLamports, '1');
+    const payload = sign({ swapTransaction: built.body.transaction });
+    const first = await broadcast(payload);
+    assert.equal(first.status, 200);
+    assert.deepEqual(await broadcast(payload), first);
+    assert.equal(sends.length, 1);
+  });
+  test('a reclaim redirected to another wallet never reaches upstream', async () => {
+    heldAmount = '0';
+    const built = await reclaim();
+    assert.equal(built.status, 200);
+    assertRejectedWithoutSend(await broadcast(sign({ swapTransaction: built.body.transaction }, message => {
+      message.instructions[0].keys[1].pubkey = Keypair.generate().publicKey;
+    })));
+  });
+  test('a reclaim is refused while the account holds tokens or outside LIVE', async () => {
+    assert.equal((await reclaim()).status, 404);
+    heldAmount = '0';
+    assert.equal((await reclaim({ mode: 'PAPER' })).status, 403);
+    assert.equal((await reclaim({ confirm: false })).status, 403);
+    setEnv('GMGN_LIVE', '0');
+    assert.match((await reclaim()).body.error, /LIVE disabled on server/);
+    assert.equal(sends.length, 0);
   });
   test('expired authorization rejects before dispatch', async () => {
     const payload = sign(await build());

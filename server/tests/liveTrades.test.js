@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { readSettlement, syncLiveTrades, summarizeLiveTrades, liveTradeRecord } from '../liveTrades.js';
+import { readSettlement, syncLiveTrades, summarizeLiveTrades, liveTradeRecord, dailyLossStatus, assertDailyLossAllowsBuy, utcDayStart } from '../liveTrades.js';
 import { authorizeBroadcast, inspectBroadcast, claimBroadcast, completeBroadcast, sentBroadcasts } from '../tradeLedger.js';
 
 const SOL = 'So11111111111111111111111111111111111111112';
@@ -127,7 +127,7 @@ test('the live trade route needs the access token and rejects a malformed wallet
   const { registerLiveTradeRoutes } = await import('../liveTradeRoutes.js');
   const app = express();
   const requireLocalToken = (req, res, next) => req.get('x-gmgn-token') === 'ok' ? next() : res.status(401).json({ ok: false });
-  registerLiveTradeRoutes(app, { requireLocalToken, connection: { getTransaction: async () => null } });
+  registerLiveTradeRoutes(app, { requireLocalToken, connection: { getTransaction: async () => null }, dailyLossLimitLamports: 50_000_000n });
   const server = app.listen(0, '127.0.0.1');
   t.after(() => server.close());
   await new Promise(resolve => server.once('listening', resolve));
@@ -137,4 +137,91 @@ test('the live trade route needs the access token and rejects a malformed wallet
   const body = await (await fetch(`${url}?wallet=${W}`, { headers: { 'x-gmgn-token': 'ok' } })).json();
   assert.equal(body.ok, true); assert.deepEqual(body.trades, []);
   assert.deepEqual(body.sync, { stored: 0, waiting: 0, error: null });
+  assert.equal(body.dailyLoss.limitLamports, '50000000'); assert.equal(body.dailyLoss.blocked, false);
+});
+
+const DAY = 86_400_000;
+const NOON = 20_000 * DAY + DAY / 2; // a fixed UTC noon
+async function seed(rows) {
+  // Each row: [slot, side, status, solDelta, tokenDelta, timeMs]
+  const tx = rows.map(([slot, , , sol, tokens, at]) => ({ slot, at, sol, tokens }));
+  const broadcasts = () => rows.map(([slot, side]) => ({ tradeId: `trade-${String(slot).padStart(10, '0')}`, wallet: W, side,
+    signature: `sig${slot}`, intent: side === 'buy' ? { inputMint: SOL, outputMint: MINT } : { inputMint: MINT, outputMint: SOL } }));
+  const connection = { getTransaction: async signature => {
+    const i = Number(signature.slice(3));
+    const row = rows.find(r => r[0] === i);
+    const t = tx.find(r => r.slot === i);
+    const result = chainTx({ slot: i, solBefore: 1_000_000_000, solAfter: 1_000_000_000 + t.sol,
+      tokensBefore: 10_000, tokensAfter: 10_000 + t.tokens, err: row[2] === 'failed' ? { InstructionError: [0, 'x'] } : null });
+    return { ...result, blockTime: Math.floor(t.at / 1000) };
+  } };
+  return syncLiveTrades({ connection, broadcasts });
+}
+
+test('the daily loss counts today\'s realised results in UTC and ignores yesterday', async t => {
+  temporary(t);
+  await seed([
+    [1, 'buy', 'confirmed', -20_000_000, 1000, NOON - DAY],
+    [2, 'close', 'confirmed', 5_000_000, -500, NOON - DAY],      // yesterday: lost 0.005
+    [3, 'close', 'confirmed', 4_000_000, -250, NOON],            // today: 4m - 5m cost = -0.001
+    [4, 'buy', 'failed', -5_000, 0, NOON + 1000],               // today: fee lost
+  ]);
+  const status = dailyLossStatus({ limitLamports: 2_000_000n, now: NOON + 2000 });
+  assert.equal(status.dayStart, utcDayStart(NOON));
+  assert.equal(status.realisedTodayLamports, String(-1_000_000 - 5_000));
+  assert.equal(status.lossTodayLamports, '1005000');
+  assert.equal(status.blocked, false);
+  assert.equal(dailyLossStatus({ limitLamports: 1_005_000n, now: NOON + 2000 }).blocked, true, 'reaching the limit blocks');
+  assert.equal(dailyLossStatus({ limitLamports: 1_005_000n, now: NOON + DAY }).blocked, false, 'resets at the next UTC day');
+});
+
+test('today\'s gains offset today\'s losses, and unsold tokens do not count', async t => {
+  temporary(t);
+  await seed([
+    [1, 'buy', 'confirmed', -10_000_000, 1000, NOON],
+    [2, 'close', 'confirmed', 3_000_000, -500, NOON],   // -2m
+    [3, 'buy', 'confirmed', -10_000_000, 1000, NOON],   // second token lot, unsold
+  ]);
+  const status = dailyLossStatus({ limitLamports: 50_000_000n, now: NOON });
+  assert.equal(status.realisedTodayLamports, String(3_000_000 - 5_000_000));
+});
+
+test('a gain later the same day brings the daily loss back down', async t => {
+  temporary(t);
+  await seed([
+    [1, 'buy', 'confirmed', -10_000_000, 1000, NOON],
+    [2, 'close', 'confirmed', 3_000_000, -500, NOON],
+    [3, 'close', 'confirmed', 9_000_000, -500, NOON],
+  ]);
+  const later = dailyLossStatus({ limitLamports: 1n, now: NOON });
+  assert.equal(later.realisedTodayLamports, '2000000'); assert.equal(later.lossTodayLamports, '0'); assert.equal(later.blocked, false);
+});
+
+test('buys are refused when the limit is reached or today\'s losses cannot be checked', async t => {
+  temporary(t);
+  await seed([[1, 'buy', 'failed', -60_000_000, 0, NOON]]);
+  const quiet = async () => ({ stored: 0, waiting: 0, error: null });
+  await assert.rejects(assertDailyLossAllowsBuy({ connection: null, limitLamports: 50_000_000n, now: () => NOON, sync: quiet }),
+    e => e.status === 403 && /Daily loss limit reached: lost 0.06 SOL today \(limit 0.05 SOL\).*Selling still works/.test(e.message));
+  const ok = await assertDailyLossAllowsBuy({ connection: null, limitLamports: 100_000_000n, now: () => NOON, sync: quiet });
+  assert.equal(ok.blocked, false);
+  const broken = async () => ({ stored: 0, waiting: 1, error: 'sig1…: RPC down' });
+  await assert.rejects(assertDailyLossAllowsBuy({ connection: null, limitLamports: 100_000_000n, now: () => NOON, sync: broken }),
+    e => e.status === 503 && /Cannot check today's live losses/.test(e.message));
+});
+
+test('a sent trade that never lands stops being looked up and is not counted', async t => {
+  temporary(t);
+  let lookups = 0;
+  const connection = { getTransaction: async () => { lookups++; return null; } };
+  const broadcasts = () => [{ tradeId: 'trade-lost-00001', wallet: W, side: 'buy', signature: 'siglost111', updatedAt: 1_000,
+    intent: { inputMint: SOL, outputMint: MINT } }];
+  const early = await syncLiveTrades({ connection, broadcasts, now: () => 1_000 + 60_000 });
+  assert.equal(early.waiting, 1, 'still within the landing window');
+  const late = await syncLiveTrades({ connection, broadcasts, now: () => 1_000 + 11 * 60_000 });
+  assert.equal(late.stored, 1);
+  await syncLiveTrades({ connection, broadcasts, now: () => 1_000 + 20 * 60_000 });
+  assert.equal(lookups, 2, 'never looked up again');
+  assert.equal(liveTradeRecord().trades.length, 0);
+  assert.equal(dailyLossStatus({ limitLamports: 1n, now: 1_000 }).lossTodayLamports, '0');
 });

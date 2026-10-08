@@ -155,7 +155,9 @@ async function installApiFixtures(page, scenario = {}) {
         positions: [{ mint, wallet: 'w', heldAtomic: '500', costLamports: '6000000', boughtLamports: '12000000', soldLamports: '5000000',
           feesLamports: '10000', realisedPnlLamports: '-1000000', trades: 2, failed: 0 }],
         totals: { realisedPnlLamports: '-1000000', feesLamports: '10000', openCostLamports: '6000000' },
-        sync: { stored: 0, waiting: 0, error: null } } });
+        sync: { stored: 0, waiting: 0, error: null },
+        dailyLoss: { dayStart: 0, resetsAt: 86400000, realisedTodayLamports: '-1000000', lossTodayLamports: '1000000',
+          limitLamports: '50000000', blocked: false } } });
     }
     if (url.pathname === '/api/paper/portfolio' || url.pathname === '/api/paper/refresh') return route.fulfill({ json: paperPortfolio() });
     if (url.pathname === '/api/research/scans') return route.fulfill({ json: { totals: { observations: 1, eligible: 0, blocked: 1 }, outcomeCounts: [], rows: [{
@@ -527,6 +529,7 @@ test('research controls persist pauses and clearly separate virtual comparison f
   const record = page.getByRole('region', { name: 'Live trade record', exact: true });
   await expect(record.getByText('-0.001000 SOL').first()).toBeVisible();
   await expect(record.getByRole('cell', { name: 'DezXAZ…' })).toBeVisible();
+  await expect(record.getByText(/Daily loss limit: 0\.001000 of 0\.050000 SOL lost today/)).toBeVisible();
   await record.screenshot({ path: '/tmp/gmgn-live-record.png' });
   await panel.screenshot({ path: '/tmp/gmgn-automation-panel.png' });
   await page.getByRole('button', { name: 'Trade', exact: true }).click();

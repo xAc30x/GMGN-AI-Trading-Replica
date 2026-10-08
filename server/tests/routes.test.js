@@ -7,6 +7,8 @@ import path from 'node:path';
 import bs58 from 'bs58';
 import { createSignedInSession } from './authSession.js';
 import { authorizeBroadcast } from '../tradeLedger.js';
+import { dailyLossStatus } from '../liveTrades.js';
+import { DatabaseSync } from 'node:sqlite';
 import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 let app;
 
@@ -23,6 +25,7 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   const oldToken = process.env.GMGN_LOCAL_TOKEN;
   const oldTradePath = process.env.GMGN_TRADE_LEDGER_PATH;
   const oldPortfolioPath = process.env.GMGN_PORTFOLIO_LEDGER_PATH;
+  const oldLiveTradesPath = process.env.GMGN_LIVE_TRADES_PATH;
   const oldRpcUrl = process.env.SOLANA_RPC_URL;
   const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmgn-portfolio-route-'));
   const rpcFixture = http.createServer(async (req, res) => {
@@ -50,12 +53,14 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   process.env.GMGN_LOCAL_TOKEN='test-only-local-token';
   process.env.GMGN_TRADE_LEDGER_PATH=path.join(portfolioDir, 'trades.json');
   process.env.GMGN_PORTFOLIO_LEDGER_PATH=path.join(portfolioDir, 'portfolio.sqlite');
+  process.env.GMGN_LIVE_TRADES_PATH=path.join(portfolioDir, 'live-trades.sqlite');
   process.env.SOLANA_RPC_URL=`http://127.0.0.1:${rpcFixture.address().port}`;
   t.after(async () => {
     if (oldLive === undefined) delete process.env.GMGN_LIVE; else process.env.GMGN_LIVE=oldLive;
     if (oldToken === undefined) delete process.env.GMGN_LOCAL_TOKEN; else process.env.GMGN_LOCAL_TOKEN=oldToken;
     if (oldTradePath === undefined) delete process.env.GMGN_TRADE_LEDGER_PATH; else process.env.GMGN_TRADE_LEDGER_PATH=oldTradePath;
     if (oldPortfolioPath === undefined) delete process.env.GMGN_PORTFOLIO_LEDGER_PATH; else process.env.GMGN_PORTFOLIO_LEDGER_PATH=oldPortfolioPath;
+    if (oldLiveTradesPath === undefined) delete process.env.GMGN_LIVE_TRADES_PATH; else process.env.GMGN_LIVE_TRADES_PATH=oldLiveTradesPath;
     if (oldRpcUrl === undefined) delete process.env.SOLANA_RPC_URL; else process.env.SOLANA_RPC_URL=oldRpcUrl;
     fs.rmSync(portfolioDir,{ recursive:true,force:true });
     await new Promise(resolve => rpcFixture.close(resolve));
@@ -144,6 +149,19 @@ test('route invariants: auth, LIVE gate, cap, denylist, fresh quote, closes', as
   assert.equal(builtQuote.outputMint,sol);
   assert.equal((await request('/api/sol/close-tx',{ tradeId:'controlled-close-trade-0001',userPublicKey:sol,inputMint:mint,
     amountAtomic:'1001',slippageBps:100,confirm:true,mode:'LIVE' })).status,400);
+
+  // A realised loss today at the default 0.05 SOL limit pauses new buys; selling still builds.
+  dailyLossStatus({ limitLamports: 1n });
+  const record = new DatabaseSync(process.env.GMGN_LIVE_TRADES_PATH);
+  record.prepare('INSERT INTO live_trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('loss-today-00001', 'losssig', sol, mint,
+    'buy', 'failed', 1, Date.now(), '-50000000', '0', '5000', Date.now());
+  record.close();
+  const blocked = await buildWithNewId({});
+  assert.equal(blocked.status,403,JSON.stringify(blocked.body));
+  assert.match(blocked.body.error,/Daily loss limit reached/);
+  assert.equal((await request('/api/sol/close-tx',{ tradeId:'controlled-close-trade-0002',userPublicKey:sol,inputMint:mint,
+    amountAtomic:'100',slippageBps:100,confirm:true,mode:'LIVE' })).status,200);
+  assert.equal((await buildWithNewId({ mode:'PAPER' })).status,200, 'paper builds are not limited');
 });
 
 test('RPC proxy keeps broadcast behind LIVE while allowing reads and simulation', async t => {

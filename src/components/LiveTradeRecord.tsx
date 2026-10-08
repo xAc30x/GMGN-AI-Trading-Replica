@@ -30,6 +30,12 @@ export function LiveTradeRecord() {
       {data?.sync.error && <p className="cred-msg err">Some trades could not be looked up yet: {data.sync.error}</p>}
       {data && data.sync.waiting > 0 && !data.sync.error && <p className="help">{data.sync.waiting} sent trade(s) not on chain yet; checking again shortly.</p>}
       {data && <>
+        <p className={data.dailyLoss.blocked ? 'cred-msg err' : 'help'} role="status">
+          {data.dailyLoss.blocked
+            ? `Daily loss limit reached: new live buys are paused until ${new Date(data.dailyLoss.resetsAt).toLocaleString()}. Selling still works.`
+            : `Daily loss limit: ${sol(data.dailyLoss.lossTodayLamports)} of ${sol(data.dailyLoss.limitLamports)} SOL lost today (resets at 00:00 UTC).`}
+          {' '}Only sold tokens and failed-trade fees count; a drop in tokens you still hold does not count until you sell.
+        </p>
         <div className="research-stats">
           <span>Realized P&amp;L <strong>{sol(data.totals.realisedPnlLamports)} SOL</strong></span>
           <span>Fees paid <strong>{sol(data.totals.feesLamports)} SOL</strong></span>

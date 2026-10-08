@@ -435,5 +435,7 @@ export interface LiveTradeRecordResponse {
   trades: LiveTradeRow[]; positions: LiveTradePosition[];
   totals: { realisedPnlLamports: string; feesLamports: string; openCostLamports: string };
   sync: { stored: number; waiting: number; error: string | null };
+  dailyLoss: { dayStart: number; resetsAt: number; realisedTodayLamports: string; lossTodayLamports: string;
+    limitLamports: string; blocked: boolean };
 }
 export const fetchLiveTradeRecord = () => jsonFetch<LiveTradeRecordResponse>('/api/live/trades');

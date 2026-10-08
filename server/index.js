@@ -30,6 +30,7 @@ import { MAX_RUG_SCORE, MIN_LIQUIDITY_USD } from './rugScanner.js';
 import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
 import { registerLiveTradeRoutes } from './liveTradeRoutes.js';
+import { assertDailyLossAllowsBuy } from './liveTrades.js';
 import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
 import { appleSettings, googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
@@ -108,6 +109,9 @@ const CRED_ENV_KEYS = new Set([
 const DEFAULT_MAX_NATIVE_AMOUNT = 0.05;
 const MAX_PORTFOLIO_SOL = envNumber('GMGN_MAX_PORTFOLIO_SOL', 0.1, { min: 0.01, max: 100 });
 const MAX_OPEN_POSITIONS = envNumber('GMGN_MAX_OPEN_POSITIONS', 5, { min: 1, max: 100, integer: true });
+// New live buys stop for the rest of the UTC day once realised live losses reach this much SOL.
+const MAX_DAILY_LOSS_SOL = envNumber('GMGN_MAX_DAILY_LOSS_SOL', 0.05, { min: 0.001, max: 100 });
+const MAX_DAILY_LOSS_LAMPORTS = solToLamports(String(MAX_DAILY_LOSS_SOL));
 const TOKEN_HEADER = 'x-gmgn-token';
 const API_REQUESTS_PER_MIN = envNumber('GMGN_API_REQUESTS_PER_MIN', 300, { min: 30, max: 10000, integer: true });
 const AUTH_FAILURES_PER_15_MIN = envNumber('GMGN_AUTH_FAILURES_PER_15_MIN', 10, { min: 1, max: 1000, integer: true });
@@ -583,6 +587,7 @@ app.get('/api/health', async (_req, res) => {
     maxNativeAmount: getMaxNativeAmount(),
     maxPortfolioSol: MAX_PORTFOLIO_SOL,
     maxOpenPositions: MAX_OPEN_POSITIONS,
+    maxDailyLossSol: MAX_DAILY_LOSS_SOL,
     maxSlippageBps: MAX_SLIPPAGE_BPS,
     defaultSlippageBps: DEFAULT_SLIPPAGE_BPS,
     maxPriceImpactPct: MAX_PRICE_IMPACT_PCT,
@@ -968,6 +973,9 @@ app.post('/api/sol/swap-tx', requireLocalToken, requireLiveFlag, withTradeLock(a
     const safety = await assessMint(outputMint);
     assertMintSafe(safety);
 
+    if (body.mode === 'LIVE') {
+      await assertDailyLossAllowsBuy({ connection: portfolioConnection, limitLamports: MAX_DAILY_LOSS_LAMPORTS });
+    }
     const portfolio = body.mode === 'LIVE'
       ? await reservePortfolioBuy({
         connection: portfolioConnection,
@@ -1128,7 +1136,7 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
 
 const scanDiscovery = createDiscoveryScanner({ assertMint: mint => assertOutputToken('sol', mint) });
 registerMarketRoutes(app, { requireLocalToken, requireLiveFlag, assertOutputToken, scanDiscovery });
-registerLiveTradeRoutes(app, { requireLocalToken, connection: portfolioConnection });
+registerLiveTradeRoutes(app, { requireLocalToken, connection: portfolioConnection, dailyLossLimitLamports: MAX_DAILY_LOSS_LAMPORTS });
 const startResearchMonitor = registerResearchRoutes(app, {
   requireLocalToken, requireLiveFlag, assertOutputToken, maxAmount: getMaxNativeAmount, enabled: liveEnabled, scanDiscovery,
 });

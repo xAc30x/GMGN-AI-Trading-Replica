@@ -120,6 +120,7 @@ process.env.GMGN_SOL_BROADCAST = '1';
 process.env.GMGN_LOCAL_TOKEN = 'controlled-e2e-token';
 process.env.GMGN_TRADE_LEDGER_PATH = path.join(ledgerDir, 'ledger.json');
 process.env.GMGN_PORTFOLIO_LEDGER_PATH = path.join(ledgerDir, 'portfolio.sqlite');
+process.env.GMGN_LIVE_TRADES_PATH = path.join(ledgerDir, 'live-trades.sqlite');
 const session = await createSignedInSession();
 const { app } = await import('../index.js');
 

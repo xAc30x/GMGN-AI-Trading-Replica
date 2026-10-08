@@ -13,6 +13,9 @@ import { sentBroadcasts } from './tradeLedger.js';
 
 const DEFAULT_PATH = fileURLToPath(new URL('./.live-trades.sqlite', import.meta.url));
 const MAX_LOOKUPS_PER_SYNC = 10;
+// A swap's blockhash expires about 90 seconds after it is built, so a transaction the RPC still
+// cannot find this long after it was sent never landed. It is marked so it is not looked up forever.
+const NOT_LANDED_AFTER_MS = 10 * 60_000;
 const fail = (message, status = 502) => { throw Object.assign(new Error(message), { status }); };
 
 function withLiveTrades(action) {
@@ -72,7 +75,10 @@ export async function syncLiveTrades({ connection, broadcasts = sentBroadcasts, 
   for (const b of missing) {
     try {
       const tx = await connection.getTransaction(b.signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
-      const settled = readSettlement(tx, { wallet: b.wallet, mint: tradeMint(b) });
+      let settled = readSettlement(tx, { wallet: b.wallet, mint: tradeMint(b) });
+      if (!settled && Number.isSafeInteger(b.updatedAt) && now() - b.updatedAt > NOT_LANDED_AFTER_MS) {
+        settled = { status: 'not_landed', slot: 0, blockTime: null, solDeltaLamports: '0', tokenDeltaAtomic: '0', feeLamports: '0' };
+      }
       if (!settled) continue;
       withLiveTrades(db => db.prepare(`INSERT OR IGNORE INTO live_trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         b.tradeId, b.signature, b.wallet, tradeMint(b), b.side, settled.status, settled.slot, settled.blockTime,
@@ -92,6 +98,7 @@ export async function syncLiveTrades({ connection, broadcasts = sentBroadcasts, 
  */
 export function summarizeLiveTrades(trades) {
   const byMint = new Map();
+  const realised = [];
   for (const t of [...trades].sort((a, b) => a.slot - b.slot || a.tradeId.localeCompare(b.tradeId))) {
     const m = byMint.get(t.mint) ?? { mint: t.mint, wallet: t.wallet, heldAtomic: 0n, costLamports: 0n,
       boughtLamports: 0n, soldLamports: 0n, feesLamports: 0n, realisedPnlLamports: 0n, trades: 0, failed: 0 };
@@ -99,8 +106,10 @@ export function summarizeLiveTrades(trades) {
     const sol = BigInt(t.solDeltaLamports);
     const tokens = BigInt(t.tokenDeltaAtomic);
     m.trades++; m.feesLamports += BigInt(t.feeLamports);
+    const at = t.blockTime ?? t.recordedAt;
     if (t.status === 'failed') {
       m.failed++; m.realisedPnlLamports += sol;
+      realised.push({ tradeId: t.tradeId, at, lamports: sol });
     } else if (t.side === 'buy') {
       m.boughtLamports += -sol; m.costLamports += -sol; m.heldAtomic += tokens;
     } else {
@@ -108,20 +117,57 @@ export function summarizeLiveTrades(trades) {
       // Selling more than this record knows of (tokens bought elsewhere) books it at zero cost.
       const costSold = m.heldAtomic > 0n ? m.costLamports * (sold < m.heldAtomic ? sold : m.heldAtomic) / m.heldAtomic : 0n;
       m.soldLamports += sol; m.realisedPnlLamports += sol - costSold;
+      realised.push({ tradeId: t.tradeId, at, lamports: sol - costSold });
       m.costLamports -= costSold; m.heldAtomic = m.heldAtomic > sold ? m.heldAtomic - sold : 0n;
     }
   }
   const positions = [...byMint.values()].map(m => Object.fromEntries(Object.entries(m)
     .map(([k, v]) => [k, typeof v === 'bigint' ? String(v) : v])));
   const total = key => String(positions.reduce((sum, p) => sum + BigInt(p[key]), 0n));
-  return { positions, totals: { realisedPnlLamports: total('realisedPnlLamports'), feesLamports: total('feesLamports'),
+  return { positions, realised, totals: { realisedPnlLamports: total('realisedPnlLamports'), feesLamports: total('feesLamports'),
     openCostLamports: total('costLamports') } };
 }
 
 export function liveTradeRecord({ wallet } = {}) {
   const trades = withLiveTrades(db => db.prepare(`SELECT trade_id AS tradeId, signature, wallet, mint, side, status, slot,
     block_time AS blockTime, sol_delta_lamports AS solDeltaLamports, token_delta_atomic AS tokenDeltaAtomic,
-    fee_lamports AS feeLamports, recorded_at AS recordedAt FROM live_trades ${wallet ? 'WHERE wallet=?' : ''} ORDER BY slot DESC`)
+    fee_lamports AS feeLamports, recorded_at AS recordedAt FROM live_trades WHERE status<>'not_landed' ${wallet ? 'AND wallet=?' : ''} ORDER BY slot DESC`)
     .all(...(wallet ? [wallet] : [])));
-  return { trades, ...summarizeLiveTrades(trades) };
+  const { realised: _perTrade, ...summary } = summarizeLiveTrades(trades);
+  return { trades, ...summary };
+}
+
+/** Start of the current day in UTC, so the limit resets at the same moment wherever the server runs. */
+export const utcDayStart = now => Math.floor(now / 86_400_000) * 86_400_000;
+
+/**
+ * Today's realised live result across all wallets: sells against their average cost, plus fees
+ * of failed transactions. Losses on tokens still held are not counted until they are sold.
+ */
+export function dailyLossStatus({ limitLamports, now = Date.now() }) {
+  const trades = withLiveTrades(db => db.prepare(`SELECT trade_id AS tradeId, wallet, mint, side, status, slot,
+    block_time AS blockTime, sol_delta_lamports AS solDeltaLamports, token_delta_atomic AS tokenDeltaAtomic,
+    fee_lamports AS feeLamports, recorded_at AS recordedAt FROM live_trades WHERE status<>'not_landed'`).all());
+  const dayStart = utcDayStart(now);
+  const today = summarizeLiveTrades(trades).realised.filter(r => r.at >= dayStart)
+    .reduce((sum, r) => sum + r.lamports, 0n);
+  const loss = today < 0n ? -today : 0n;
+  return { dayStart, resetsAt: dayStart + 86_400_000, realisedTodayLamports: String(today),
+    lossTodayLamports: String(loss), limitLamports: String(limitLamports), blocked: loss >= BigInt(limitLamports) };
+}
+
+/**
+ * Refuses a new live buy once today's realised loss reaches the limit. It first records any
+ * sent trades it can find, and refuses when it cannot, because an unknown loss is not a small one.
+ * Sells never call this.
+ */
+export async function assertDailyLossAllowsBuy({ connection, limitLamports, now = Date.now, sync = syncLiveTrades }) {
+  const synced = await sync({ connection });
+  if (synced.error) fail(`Cannot check today's live losses right now (${synced.error}). Try again shortly.`, 503);
+  const status = dailyLossStatus({ limitLamports, now: now() });
+  if (status.blocked) {
+    fail(`Daily loss limit reached: lost ${Number(status.lossTodayLamports) / 1e9} SOL today (limit ${Number(limitLamports) / 1e9} SOL). `
+      + 'New live buys are paused until 00:00 UTC. Selling still works.', 403);
+  }
+  return status;
 }

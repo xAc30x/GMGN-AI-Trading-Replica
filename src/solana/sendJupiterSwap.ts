@@ -4,7 +4,7 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
-import { fetchMintSafety, fetchSolCloseTx, fetchSolSwapTx } from '../api';
+import { fetchMintSafety, fetchSolCloseTx, fetchSolReclaimTx, fetchSolSwapTx } from '../api';
 import {
   addConfirmedBuy,
   applyConfirmedClose,
@@ -15,6 +15,7 @@ import {
 import { confirmSwap } from './confirmSwap.ts';
 import { makeBroadcastConnection, makeConnection } from './constants';
 import { validateSwapTransaction } from './validateSwapTransaction.js';
+import { validateReclaimTransaction } from './validateReclaimTransaction.js';
 
 /** What validateSwapTransaction confirmed about the real transaction, reported just before the wallet opens. */
 export interface CheckedSwap {
@@ -24,6 +25,26 @@ export interface CheckedSwap {
   slippageBps: number;
   priorityFeeLamports: string;
   transactionFeeLamports: number;
+}
+
+/** Asks the wallet to sign and refuses anything but a signature over the exact same message. */
+async function signUnchanged(
+  wallet: WalletContextState,
+  tx: VersionedTransaction,
+): Promise<{ signed: VersionedTransaction; signature: string }> {
+  if (!wallet.signTransaction) throw new Error('Connected wallet cannot sign transactions');
+  const originalMessage = tx.message.serialize();
+  const signed = await wallet.signTransaction(tx);
+  const signedMessage = signed.message.serialize();
+  if (signedMessage.length !== originalMessage.length ||
+      !signedMessage.every((v, i) => v === originalMessage[i])) {
+    throw new Error('Wallet returned a modified transaction');
+  }
+  const signatureBytes = signed.signatures[0];
+  if (!signatureBytes || signatureBytes.every((byte) => byte === 0)) {
+    throw new Error('Wallet did not produce a transaction signature');
+  }
+  return { signed, signature: bs58.encode(signatureBytes) };
 }
 
 async function signSendBase64(
@@ -61,18 +82,7 @@ async function signSendBase64(
     slippageBps: intent.slippageBps,
     ...fees,
   });
-  const originalMessage = tx.message.serialize();
-  const signed = await wallet.signTransaction(tx);
-  const signedMessage = signed.message.serialize();
-  if (signedMessage.length !== originalMessage.length ||
-      !signedMessage.every((v, i) => v === originalMessage[i])) {
-    throw new Error('Wallet returned a modified transaction');
-  }
-  const signatureBytes = signed.signatures[0];
-  if (!signatureBytes || signatureBytes.every((byte) => byte === 0)) {
-    throw new Error('Wallet did not produce a transaction signature');
-  }
-  const signature = bs58.encode(signatureBytes);
+  const { signed, signature } = await signUnchanged(wallet, tx);
   updateTradeAttempt(attempt.id, {
     status: 'submitted',
     signature,
@@ -202,6 +212,36 @@ async function executeSolClose(args: {
   });
 }
 
+/**
+ * Closes the wallet's empty token accounts for one coin so their rent (about 0.002 SOL each)
+ * returns to the wallet. The server builds it, this browser checks it independently, and the
+ * wallet must approve it. It is sent through the same server broadcast gate as trades.
+ */
+async function executeReclaimRent(args: {
+  wallet: WalletContextState;
+  mint: string;
+}): Promise<{ signature: string; explorerUrl: string; refundLamports: string }> {
+  const { wallet, mint } = args;
+  if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Connect a Solana wallet that can sign transactions');
+  const walletAddress = wallet.publicKey.toBase58();
+  const tradeId = `reclaim-${crypto.randomUUID()}`;
+  const built = await fetchSolReclaimTx({ tradeId, mint, userPublicKey: walletAddress, confirm: true, mode: 'LIVE' });
+  if (!Number.isSafeInteger(built.lastValidBlockHeight) || built.lastValidBlockHeight < 1) {
+    throw new Error('Transaction expiry is missing or invalid');
+  }
+  const tx = validateReclaimTransaction({
+    transaction: built.transaction,
+    walletPublicKey: walletAddress,
+    accounts: built.accounts.map((a) => a.address),
+  });
+  const { signed, signature } = await signUnchanged(wallet, tx);
+  const connection = makeBroadcastConnection(tradeId);
+  const rpcSignature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+  if (rpcSignature !== signature) throw new Error(`RPC signature mismatch for ${signature}; check it before retrying`);
+  await confirmSwap(connection, signature, tx.message.recentBlockhash, built.lastValidBlockHeight);
+  return { signature, explorerUrl: `https://solscan.io/tx/${signature}`, refundLamports: built.refundLamports };
+}
+
 /** PAPER mode: mint-safety + build Jupiter tx + RPC simulate. Never signs or sends. */
 export async function paperSimulateSolSwap(args: {
   userPublicKey: string;
@@ -268,4 +308,7 @@ export function signAndSendSolSwap(args: Parameters<typeof executeSolSwap>[0]) {
 }
 export function signAndSendSolClose(args: Parameters<typeof executeSolClose>[0]) {
   return withWalletAction(() => executeSolClose(args));
+}
+export function signAndSendReclaimRent(args: Parameters<typeof executeReclaimRent>[0]) {
+  return withWalletAction(() => executeReclaimRent(args));
 }

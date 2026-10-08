@@ -45,6 +45,8 @@ function fixture(t, options = {}) {
     time: () => at, advance: ms => { at += ms; }, price: value => { sell = value; },
     broken: value => { broken = value; }, blocked: value => { blocked = value; } };
 }
+// v3: a full exit closes the empty token account, returning the entry rent minus the close fee.
+const REFUND = 2039280 - 5000;
 const entry = { id: 'paper-request-0001', mint, symbol: 'TEST', amount: 0.05, slippageBps: 100 };
 
 test('scan history persists blocked and eligible snapshots and labels unknown / missed outcomes', async t => {
@@ -85,16 +87,16 @@ test('paper accounting persists across engine recreation; quotes are delayed, co
   await assert.rejects(restarted.open({ ...entry, amount: 0.04 }), /reused/);
   assert.equal(paperPortfolio(f.time()).stats.equityLamports, null);
   await restarted.refresh();
-  assert.equal(paperPortfolio(f.time()).stats.equityLamports, '997440720');
+  assert.equal(paperPortfolio(f.time()).stats.equityLamports, String(997440720 + REFUND));
   f.advance(45001);
   assert.equal(paperPortfolio(f.time()).stats.equityLamports, null);
   const closed = await restarted.close(entry.id);
-  assert.equal(closed.proceedsLamports, '49490000');
-  assert.equal(closed.realisedPnlLamports, '-2559280');
+  assert.equal(closed.proceedsLamports, String(49490000 + REFUND));
+  assert.equal(closed.realisedPnlLamports, String(-2559280 + REFUND));
   await restarted.close(entry.id);
-  assert.equal(paperPortfolio(f.time()).account.cash, '997440720');
+  assert.equal(paperPortfolio(f.time()).account.cash, String(997440720 + REFUND));
   assert.equal(paperPortfolio(f.time()).stats.closed, 1);
-  assert.equal(paperPortfolio(f.time()).stats.realisedPnlLamports, '-2559280');
+  assert.equal(paperPortfolio(f.time()).stats.realisedPnlLamports, String(-2559280 + REFUND));
 });
 
 test('paper trades pay the live-style priority fee on entry and exit; marks estimate it from the entry', async t => {
@@ -104,18 +106,18 @@ test('paper trades pay the live-style priority fee on entry and exit; marks esti
     fees.push(fee); return fee;
   } });
   const opened = await f.engine.open(entry);
-  assert.equal(opened.model.version, 'quote-min-output-v2');
+  assert.equal(opened.model.version, 'quote-min-output-v3');
   assert.equal(opened.entryPriorityFeeLamports, '200000');
   assert.equal(opened.costLamports, String(50000000 + 5000 + 200000 + 2039280));
   await f.engine.refresh();
   const marked = paperPortfolio(f.time()).positions[0];
-  assert.equal(marked.mark.netLamports, String(49500000 - 5000 - 200000));
+  assert.equal(marked.mark.netLamports, String(49500000 - 5000 - 200000 + REFUND));
   assert.deepEqual(fees, ['200000'], 'marks do not ask Jupiter for a fee');
   const closed = await f.engine.close(entry.id);
   assert.equal(closed.exitFeeLamports, '305000');
-  assert.equal(closed.proceedsLamports, String(49500000 - 305000));
-  assert.equal(closed.realisedPnlLamports, String(49500000 - 305000 - 52244280));
-  assert.equal(paperPortfolio(f.time()).account.cash, String(1000000000 - 52244280 + 49195000));
+  assert.equal(closed.proceedsLamports, String(49500000 - 305000 + REFUND));
+  assert.equal(closed.realisedPnlLamports, String(49500000 - 305000 + REFUND - 52244280));
+  assert.equal(paperPortfolio(f.time()).account.cash, String(1000000000 - 52244280 + 49195000 + REFUND));
 });
 
 test('a partial sell records the priority fee it paid', async t => {
@@ -127,13 +129,34 @@ test('a partial sell records the priority fee it paid', async t => {
 
 test('positions opened under the fixed-fee v1 model keep that fee and never ask Jupiter', async t => {
   const v1 = { ...PAPER_MODEL, version: 'quote-min-output-v1', feeLamports: '10000' };
-  delete v1.baseFeeLamports; delete v1.priorityFee;
+  delete v1.baseFeeLamports; delete v1.priorityFee; delete v1.closeAccountFeeLamports;
   const f = fixture(t, { model: v1, priorityFee: async () => { throw new Error('v1 must not fetch a fee'); } });
   const opened = await f.engine.open(entry);
   assert.equal(opened.costLamports, '52049280');
   // A later engine on the new model still exits the old position with its own fee.
   const current = createPaperEngine({ ...f.engineOptions, model: PAPER_MODEL });
   const closed = await current.close(entry.id);
+  assert.equal(closed.proceedsLamports, '49490000');
+});
+
+// 42000000 quote: 1% slippage, 10000 fee. Net P&L is -16.2% with the refund and -20.1% without it.
+const v2Model = () => { const v2 = { ...PAPER_MODEL, version: 'quote-min-output-v2' }; delete v2.closeAccountFeeLamports; return v2; };
+for (const [name, model, state] of [['v3', PAPER_MODEL, 'open'], ['v2', v2Model(), 'closed']]) {
+  test(`${name} stop-loss on a 16% dip: position ${state} (the refund is counted only from v3)`, async t => {
+    const f = fixture(t, { model });
+    await f.engine.open(entry); f.price('42000000');
+    await f.engine.refresh();
+    const p = paperPortfolio(f.time()).positions[0];
+    assert.equal(p.state, state);
+    if (state === 'closed') assert.equal(p.rentRefundLamports, '0');
+  });
+}
+
+test('positions opened before v3 keep no rent refund when a v3 engine closes them', async t => {
+  const f = fixture(t, { model: v2Model() });
+  await f.engine.open(entry);
+  const closed = await createPaperEngine({ ...f.engineOptions, model: PAPER_MODEL }).close(entry.id);
+  assert.equal(closed.rentRefundLamports, '0');
   assert.equal(closed.proceedsLamports, '49490000');
 });
 
@@ -188,7 +211,7 @@ test('concurrent duplicate requests and cross-engine closes do not double-debit 
   assert.equal(paperPortfolio().account.cash, '947950720');
   await assert.rejects(f.engine.open({ ...entry, id: 'different-request-02' }), /already open/);
   await Promise.all([f.engine.close(entry.id), second.close(entry.id)]);
-  assert.equal(paperPortfolio().account.cash, '997440720');
+  assert.equal(paperPortfolio().account.cash, String(997440720 + REFUND));
 });
 
 for (const [reason, price, advance] of [['stop_loss', '10000000', 0], ['take_profit', '100000000', 0], ['time_exit', '50000000', 3600001]]) {
@@ -251,12 +274,12 @@ test('partial sell keeps the position open with proportional size, cost and real
   const closed = await f.engine.sell(entry.id, 100);
   assert.equal(closed.state, 'closed'); assert.equal(closed.exitReason, 'manual');
   assert.equal(f.calls.at(-1).amountAtomic, '742500');
-  assert.equal(closed.proceedsLamports, '48985000');
-  // Same as one full sale (-3054280) minus the second modeled fee.
-  assert.equal(closed.realisedPnlLamports, '-3064280');
+  assert.equal(closed.proceedsLamports, String(48985000 + REFUND));
+  // Same as one full sale (-3054280 + REFUND) minus the second modeled fee.
+  assert.equal(closed.realisedPnlLamports, String(-3064280 + REFUND));
   p = paperPortfolio(f.time());
-  assert.equal(p.account.cash, '996935720');
-  assert.equal(p.stats.realisedPnlLamports, '-3064280');
+  assert.equal(p.account.cash, String(996935720 + REFUND));
+  assert.equal(p.stats.realisedPnlLamports, String(-3064280 + REFUND));
   assert.equal(p.stats.wins, 0);
 });
 
@@ -269,10 +292,10 @@ test('100% sell is exactly the existing close; invalid percents change nothing',
   assert.equal(f.calls.length, 1);
   assert.equal(paperPortfolio().account.cash, '947950720');
   const closed = await f.engine.sell(entry.id, 100);
-  assert.equal(closed.proceedsLamports, '49490000');
-  assert.equal(closed.realisedPnlLamports, '-2559280');
+  assert.equal(closed.proceedsLamports, String(49490000 + REFUND));
+  assert.equal(closed.realisedPnlLamports, String(-2559280 + REFUND));
   await assert.rejects(f.engine.sell(entry.id, 25), /already closed/);
-  assert.equal(paperPortfolio().account.cash, '997440720');
+  assert.equal(paperPortfolio().account.cash, String(997440720 + REFUND));
 });
 
 test('stop / target checks after a partial sell value only the remaining tokens', async t => {
@@ -283,7 +306,7 @@ test('stop / target checks after a partial sell value only the remaining tokens'
   assert.equal(f.calls.at(-1).amountAtomic, '247500');
   const p = paperPortfolio(f.time()).positions[0];
   assert.equal(p.state, 'open');
-  assert.equal(p.mark.netLamports, '12241250');
+  assert.equal(p.mark.netLamports, String(12241250 + REFUND));
 });
 
 test('partial sells cannot race a pending exit or each other', async t => {
@@ -312,6 +335,6 @@ test('a partial sell that overlaps a full exit is rejected; the exit credits the
   const p = paperPortfolio(f.time());
   assert.equal(p.positions[0].state, 'closed');
   assert.equal(p.positions[0].partialExits, undefined);
-  assert.equal(p.positions[0].realisedPnlLamports, '-3054280');
-  assert.equal(p.account.cash, '996945720');
+  assert.equal(p.positions[0].realisedPnlLamports, String(-3054280 + REFUND));
+  assert.equal(p.account.cash, String(996945720 + REFUND));
 });

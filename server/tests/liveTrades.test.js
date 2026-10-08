@@ -225,3 +225,17 @@ test('a sent trade that never lands stops being looked up and is not counted', a
   assert.equal(liveTradeRecord().trades.length, 0);
   assert.equal(dailyLossStatus({ limitLamports: 1n, now: 1_000 }).lossTodayLamports, '0');
 });
+
+test('closing an emptied token account adds the returned rent to realised P&L and today\'s result', () => {
+  const trade = (slot, side, sol, tokens) => ({ tradeId: `t-${slot}`, slot, side, mint: MINT, wallet: W,
+    status: 'confirmed', solDeltaLamports: String(sol), tokenDeltaAtomic: String(tokens), feeLamports: '5000', blockTime: 1 });
+  const { positions, totals, realised } = summarizeLiveTrades([
+    trade(1, 'buy', -12_044_280, 1000),   // 0.01 SOL swap + fees + 0.00203928 rent
+    trade(2, 'close', 9_000_000, -1000),  // sells everything
+    trade(3, 'reclaim', 2_034_280, 0),    // rent back minus the close fee
+  ]);
+  assert.equal(positions[0].rentBackLamports, '2034280');
+  assert.equal(positions[0].heldAtomic, '0');
+  assert.equal(totals.realisedPnlLamports, String(9_000_000 + 2_034_280 - 12_044_280));
+  assert.deepEqual(realised.map(r => r.lamports), [9_000_000n - 12_044_280n, 2_034_280n]);
+});

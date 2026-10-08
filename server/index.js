@@ -31,6 +31,7 @@ import { registerMarketRoutes } from './marketRoutes.js';
 import { registerResearchRoutes } from './researchRoutes.js';
 import { registerLiveTradeRoutes } from './liveTradeRoutes.js';
 import { assertDailyLossAllowsBuy } from './liveTrades.js';
+import { buildReclaimTransaction } from './reclaimRent.js';
 import { parseAllowedEmails, registerAuthRoutes } from './authRoutes.js';
 import { appleSettings, googleSettings } from './externalSignIn.js';
 import { createDiscoveryScanner } from './discoveryScanner.js';
@@ -1132,6 +1133,34 @@ app.post('/api/sol/close-tx', requireLocalToken, requireLiveFlag, withTradeLock(
   }
 }));
 
+
+/**
+ * Solana: unsigned transaction that closes the wallet's empty token accounts for one coin and
+ * returns their rent to the wallet. Like every LIVE build, it can only be broadcast unchanged.
+ */
+app.post('/api/sol/reclaim-tx', requireLocalToken, requireLiveFlag, withTradeLock(async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.confirm !== true || body.mode !== 'LIVE') {
+      return res.status(403).json({ ok: false, error: 'SOL reclaim-tx rejected: confirm must be true and mode must be LIVE' });
+    }
+    const tradeId = String(body.tradeId || '');
+    assertTradeId(tradeId);
+    const userPublicKey = String(body.userPublicKey || '').trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(userPublicKey)) {
+      return res.status(400).json({ ok: false, error: 'userPublicKey required (base58)' });
+    }
+    const mint = assertOutputToken('sol', body.mint);
+    if (mint === SOL_MINT) return res.status(400).json({ ok: false, error: 'Wrapped SOL accounts are not closed here' });
+    const built = await buildReclaimTransaction({ connection: portfolioConnection, wallet: userPublicKey, mint });
+    authorizeBroadcast({ tradeId, swapTransaction: built.transaction, walletAddress: userPublicKey, side: 'reclaim', mode: 'LIVE',
+      lastValidBlockHeight: built.lastValidBlockHeight,
+      intent: { inputMint: mint, accounts: built.accounts.map(a => a.address), refundLamports: built.refundLamports } });
+    res.json({ ok: true, chain: 'sol', side: 'reclaim', mint, ...built });
+  } catch (e) {
+    res.status(e.status || 500).json({ ok: false, error: e.message });
+  }
+}));
 
 
 const scanDiscovery = createDiscoveryScanner({ assertMint: mint => assertOutputToken('sol', mint) });

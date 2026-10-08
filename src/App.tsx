@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import type { LiveBuyMeta } from './components/BuyModal';
 import { BuyModal } from './components/BuyModal';
@@ -38,7 +38,7 @@ import {
 } from './positions';
 import { fetchHealth } from './api';
 import type { HealthResponse } from './api';
-import { signAndSendSolClose } from './solana/sendJupiterSwap';
+import { signAndSendReclaimRent, signAndSendSolClose } from './solana/sendJupiterSwap';
 import { isPublicSolanaRpc, makeConnection } from './solana/constants';
 import { hasLocalToken } from './localToken';
 import {
@@ -63,6 +63,10 @@ function utcClock(): string {
 function nowTs(): string {
   return utcClock();
 }
+
+const RECLAIM_PROMPT = (symbol: string) =>
+  `Get about 0.002 SOL back: close the now-empty ${symbol} token account in your wallet? `
+  + 'This only closes an account holding zero tokens and sends its rent to your wallet. Your wallet must approve.';
 
 export default function App({ account }: { account: Account }) {
   const wallet = useWallet();
@@ -90,9 +94,12 @@ export default function App({ account }: { account: Account }) {
   const [paperVersion, setPaperVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
 
+  const toastTimer = useRef<number | undefined>(undefined);
+  // Each toast gets its full time; an earlier toast's timer must not hide a newer one.
   const showToast = useCallback((msg: string) => {
     setToast(msg);
-    window.setTimeout(() => setToast(null), 2800);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
   }, []);
 
   const reconcileTrades = useCallback(async () => {
@@ -328,6 +335,29 @@ export default function App({ account }: { account: Account }) {
     showToast('Intent recorded — complete the trade in your wallet / gmgn.ai');
   };
 
+  /** Closes the emptied token account of a fully sold coin so its rent returns to the wallet. */
+  const reclaimRent = async (mint: string, symbol: string) => {
+    if (!wallet.connected || !wallet.publicKey) {
+      showToast('Connect the wallet that held this coin first');
+      return;
+    }
+    if (!hasLocalToken()) {
+      showToast('Paste GMGN_LOCAL_TOKEN in Settings first');
+      setCredOpen(true);
+      return;
+    }
+    try {
+      const res = await signAndSendReclaimRent({ wallet, mint });
+      const refund = (Number(res.refundLamports) / 1e9).toFixed(6);
+      appendLog('SELL', 'live', `Closed empty ${symbol} account · ${refund} SOL rent back · tx ${res.signature.slice(0, 10)}…`);
+      showToast(`Got ${refund} SOL back · ${res.signature.slice(0, 12)}…`);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      appendLog('SELL', 'live', `Could not close empty ${symbol} account: ${reason}`);
+      showToast(reason);
+    }
+  };
+
   const handleClosePosition = async (id: string, percent: SellPercent) => {
     const pos = positions.find((p) => p.id === id);
     if (!pos) return;
@@ -379,6 +409,7 @@ export default function App({ account }: { account: Account }) {
           `SOL wallet ${full ? 'close' : `sell ${percent}%`} ${pos.symbol} · tx ${res.signature.slice(0, 10)}…`,
         );
         showToast(`${full ? 'Closed' : `Sold ${percent}%`} · ${res.signature.slice(0, 12)}…`);
+        if (full && window.confirm(RECLAIM_PROMPT(pos.symbol))) await reclaimRent(pos.address, pos.symbol);
       } catch (e) {
         setPositions([...INITIAL_POSITIONS, ...loadLivePositions()]);
         void reconcileTrades();
@@ -442,7 +473,12 @@ export default function App({ account }: { account: Account }) {
               <>
                 <ResearchAutomationPanel />
                 <ResearchPanel version={paperVersion} />
-                <LiveTradeRecord />
+                <LiveTradeRecord
+                  wallet={wallet.publicKey?.toBase58() ?? null}
+                  onReclaim={(mint) => {
+                    if (window.confirm(RECLAIM_PROMPT(`${mint.slice(0, 6)}…`))) void reclaimRent(mint, `${mint.slice(0, 6)}…`);
+                  }}
+                />
               </>
             ) : (
               <section className="panel">

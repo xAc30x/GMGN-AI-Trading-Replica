@@ -78,7 +78,7 @@ function withLedger(action) {
 
 export function authorizeBroadcast({ tradeId, swapTransaction, walletAddress, side, mode, lastValidBlockHeight, intent }) {
   assertTradeId(tradeId);
-  if (mode !== 'LIVE' || !['buy', 'close'].includes(side)) fail('Only LIVE builds can authorize broadcast', 400);
+  if (mode !== 'LIVE' || !['buy', 'close', 'reclaim'].includes(side)) fail('Only LIVE builds can authorize broadcast', 400);
   if (!Number.isSafeInteger(lastValidBlockHeight) || lastValidBlockHeight < 1) fail('Invalid transaction expiry', 502);
   const tx = transaction(swapTransaction);
   if (tx.message.staticAccountKeys[0].toBase58() !== walletAddress ||

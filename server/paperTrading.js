@@ -4,14 +4,19 @@ import { assessMint } from './mintSafety.js';
 
 // v2 charges each side the 5000-lamport signature fee plus the priority fee Jupiter would set for
 // that live swap. v1 positions (fixed feeLamports per side) keep their original fee when they exit.
+// v3 closes the emptied token account after a full exit, so the entry rent comes back minus the
+// close transaction's signature fee. v1/v2 positions (no closeAccountFeeLamports) keep no refund.
 export const PAPER_MODEL = Object.freeze({
-  version: 'quote-min-output-v2', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto',
-  entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000,
+  version: 'quote-min-output-v3', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto',
+  entryRentLamports: '2039280', closeAccountFeeLamports: '5000', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000,
 });
 const usesFixedFee = model => model.feeLamports !== undefined;
 /** Network fee for one side of a trade: the fixed v1 fee, or the signature fee plus a priority fee. */
 const sideFee = (model, priorityFeeLamports) => usesFixedFee(model)
   ? BigInt(model.feeLamports) : BigInt(model.baseFeeLamports) + BigInt(priorityFeeLamports);
+/** SOL returned by closing the empty token account after a full exit; zero for models without the close. */
+const rentRefund = model => model.closeAccountFeeLamports === undefined
+  ? 0n : BigInt(model.entryRentLamports) - BigInt(model.closeAccountFeeLamports);
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const event = (db, at, id, kind, data, accountId) => db.prepare('INSERT INTO paper_events (at, position_id, kind, data, account_id) VALUES (?, ?, ?, ?, ?)')
   .run(at, id, kind, JSON.stringify(data), accountId);
@@ -136,7 +141,8 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
         await sleep(p.model.latencyMs);
         const q = await freshQuote(p.mint, SOL_MINT, p.quantityAtomic, p.slippageBps);
         const fee = await exitFee(p, q);
-        const net = BigInt(q.otherAmountThreshold) - fee;
+        const refund = rentRefund(p.model);
+        const net = BigInt(q.otherAmountThreshold) - fee + refund;
         return withResearch(db => transaction(db, () => {
           const current = readPosition(db, id, accountId);
           if (current.state === 'closed') return current;
@@ -146,7 +152,7 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
           const priorProceeds = BigInt(current.proceedsLamports ?? '0');
           const priorRealised = BigInt(current.realisedPnlLamports ?? '0');
           Object.assign(current, { state: 'closed', closedAt: now(), exitReason: current.exitPending,
-            exitQuote: q, exitFeeLamports: String(fee), proceedsLamports: String(priorProceeds + net),
+            exitQuote: q, exitFeeLamports: String(fee), rentRefundLamports: String(refund), proceedsLamports: String(priorProceeds + net),
             realisedPnlLamports: String(priorRealised + net - BigInt(current.costLamports)),
             exitPending: null, lastError: null });
           save(db, current);
@@ -226,7 +232,8 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
       try {
         if (p.exitPending) { await close(p.id, p.exitPending); continue; }
         const q = await freshQuote(p.mint, SOL_MINT, p.quantityAtomic, p.slippageBps);
-        const net = BigInt(q.otherAmountThreshold) - estimatedExitFee(p);
+        // A full exit also gets the account rent back, so stops measure the trade, not the rent.
+        const net = BigInt(q.otherAmountThreshold) - estimatedExitFee(p) + rentRefund(p.model);
         const pnlPct = Number(net - BigInt(p.costLamports)) / Number(p.costLamports) * 100;
         withResearch(db => transaction(db, () => {
           const current = readPosition(db, p.id, accountId);

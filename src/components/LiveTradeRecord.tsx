@@ -4,8 +4,11 @@ import { fetchLiveTradeRecord, type LiveTradeRecordResponse } from '../api';
 const sol = (v: string) => (Number(v) / 1e9).toFixed(6);
 const short = (v: string) => `${v.slice(0, 6)}…`;
 
-/** Read-only view of live trades as recorded on chain. Never builds, signs or sends anything. */
-export function LiveTradeRecord() {
+/**
+ * View of live trades as recorded on chain. It never builds, signs or sends anything itself;
+ * the "Get rent back" button hands the coin to onReclaim, which asks the wallet.
+ */
+export function LiveTradeRecord({ wallet, onReclaim }: { wallet: string | null; onReclaim: (mint: string) => void }) {
   const [data, setData] = useState<LiveTradeRecordResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const reading = useRef(false);
@@ -43,9 +46,9 @@ export function LiveTradeRecord() {
           <span>Trades <strong>{data.trades.length}</strong></span>
         </div>
         <div className="table-wrap"><table className="screen">
-          <thead><tr><th>Token</th><th>Spent</th><th>Received</th><th>Cost still held</th><th>Realized P&amp;L</th><th>Trades</th></tr></thead>
+          <thead><tr><th>Token</th><th>Spent</th><th>Received</th><th>Cost still held</th><th>Realized P&amp;L</th><th>Trades</th><th>Account rent</th></tr></thead>
           <tbody>
-            {data.positions.length === 0 && <tr><td colSpan={6}>No live trades recorded yet.</td></tr>}
+            {data.positions.length === 0 && <tr><td colSpan={7}>No live trades recorded yet.</td></tr>}
             {data.positions.map(p => <tr key={`${p.wallet}:${p.mint}`}>
               <td title={p.mint}>{short(p.mint)}</td>
               <td>{sol(p.boughtLamports)} SOL</td>
@@ -53,6 +56,11 @@ export function LiveTradeRecord() {
               <td>{sol(p.costLamports)} SOL</td>
               <td className={BigInt(p.realisedPnlLamports) < 0n ? 'safe-bad' : undefined}>{sol(p.realisedPnlLamports)} SOL</td>
               <td>{p.trades}{p.failed > 0 && <div className="meta">{p.failed} failed</div>}</td>
+              <td>{BigInt(p.rentBackLamports) > 0n
+                ? `${sol(p.rentBackLamports)} SOL back`
+                : p.heldAtomic === '0' && BigInt(p.soldLamports) > 0n && p.wallet === wallet
+                  ? <button type="button" className="btn-ghost" onClick={() => onReclaim(p.mint)}>Get rent back</button>
+                  : '—'}</td>
             </tr>)}
           </tbody>
         </table></div>

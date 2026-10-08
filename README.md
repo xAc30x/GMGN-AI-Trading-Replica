@@ -80,6 +80,7 @@ If both providers are unavailable or return invalid data, LIVE fails closed (exc
 | POST | `/api/sol/watchlist-scan` | Batch mint-safety for up to 8 watchlist mints |
 | POST | `/api/sol/swap-tx` | Unsigned buy (SOL→mint); mint safety + impact gate |
 | POST | `/api/sol/close-tx` | Unsigned sell (mint→SOL); wallet signs |
+| POST | `/api/sol/reclaim-tx` | Unsigned close of the wallet's empty token accounts for one mint; rent returns to the wallet; wallet signs |
 
 ## Sign-in
 
@@ -284,6 +285,20 @@ too, because their fees were still paid. The Research tab shows the totals per t
 using average cost. This record is read-only: it never builds, signs or sends anything.
 The file is permissioned to 0600 and excluded from Git; back it up with the others.
 
+Buying a token creates a token account that holds about 0.002 SOL of rent. Selling
+everything leaves that account empty, and the rent stays locked until the account is
+closed. `/api/sol/reclaim-tx` builds that close: only accounts the chain reports as the
+wallet's, with zero tokens, not frozen, not wrapped SOL and closable by the wallet are
+included, and the rent goes back to the same wallet. It passes through the same trade
+ledger as swaps, so only the unchanged build can be broadcast. The record counts the
+returned rent as realised P&L, which also lowers today's loss for the daily limit.
+
+In the app, after a LIVE sell of 100% the app asks whether to close the emptied account,
+and the Live trade record shows a **Get rent back** button for sold-out coins of the
+connected wallet. The browser checks the transaction itself before the wallet opens: it
+must only close the listed accounts, send the rent to the connected wallet, and need no
+other signer. If the sell already closed the account, there is nothing to get back.
+
 ## Persistent research and paper portfolio
 
 Discovery now saves each successful feed scan in `server/.research.sqlite` (override
@@ -328,6 +343,12 @@ The explicit, unvalidated `quote-min-output-v1` model uses:
 - **0.00001 SOL estimated network/priority fee per side**, plus **0.00203928 SOL
   estimated entry account rent**, conservatively assuming no rent refund. These
   are model assumptions, not measured transaction fees or exact account costs.
+  `quote-min-output-v2` replaced the fixed fee with the 0.000005 SOL signature fee
+  plus the priority fee Jupiter would set for that swap. `quote-min-output-v3`
+  (current) returns the account rent after a full exit, minus a 0.000005 SOL fee
+  to close the empty token account, and counts that refund in stop/target checks.
+  Partial sells get no refund because the account stays open. Positions keep the
+  model they were opened under.
 - Full-position exits at **-20% net P&L**, **+30% net P&L**, or **60 minutes**, plus
   manual close. Each exit obtains another quote after the delay, so the simulated
   fill can pass a stop/target. Positions retain their model parameters across restarts.
@@ -391,8 +412,8 @@ Two immutable experiment versions receive separate **1 virtual SOL** balances:
 
 | Version | Selection rule |
 |---|---|
-| `momentum-quality-v1` | Highest eligible opportunity score, using only that scan's market and safety inputs. |
-| `safety-feed-v1` | First eligible safety-passing token in original provider feed order, with positive price and liquidity. |
+| `momentum-quality-v3` | Highest eligible opportunity score, using only that scan's market and safety inputs. |
+| `safety-feed-v3` | First eligible safety-passing token in original provider feed order, with positive price and liquidity. |
 
 Both use **0.01 SOL entries**, **100 bps slippage**, at most **3 open positions**
 per account, one attempted entry per feed scan, and a **24h per-coin cooldown**

@@ -94,14 +94,15 @@ export async function syncLiveTrades({ connection, broadcasts = sentBroadcasts, 
 /**
  * Per-token totals using average cost. A buy's cost is all the SOL that left the wallet
  * (swap, fees and rent); a sell's proceeds are all the SOL that came back. A failed
- * transaction adds its fee to realised loss without changing the holding.
+ * transaction adds its fee to realised loss without changing the holding. Closing an empty
+ * token account ('reclaim') adds the returned rent to realised P&L.
  */
 export function summarizeLiveTrades(trades) {
   const byMint = new Map();
   const realised = [];
   for (const t of [...trades].sort((a, b) => a.slot - b.slot || a.tradeId.localeCompare(b.tradeId))) {
     const m = byMint.get(t.mint) ?? { mint: t.mint, wallet: t.wallet, heldAtomic: 0n, costLamports: 0n,
-      boughtLamports: 0n, soldLamports: 0n, feesLamports: 0n, realisedPnlLamports: 0n, trades: 0, failed: 0 };
+      boughtLamports: 0n, soldLamports: 0n, rentBackLamports: 0n, feesLamports: 0n, realisedPnlLamports: 0n, trades: 0, failed: 0 };
     byMint.set(t.mint, m);
     const sol = BigInt(t.solDeltaLamports);
     const tokens = BigInt(t.tokenDeltaAtomic);
@@ -109,6 +110,10 @@ export function summarizeLiveTrades(trades) {
     const at = t.blockTime ?? t.recordedAt;
     if (t.status === 'failed') {
       m.failed++; m.realisedPnlLamports += sol;
+      realised.push({ tradeId: t.tradeId, at, lamports: sol });
+    } else if (t.side === 'reclaim') {
+      // Closing the emptied token account returns the rent the buy paid, so it counts as realised.
+      m.rentBackLamports += sol; m.realisedPnlLamports += sol;
       realised.push({ tradeId: t.tradeId, at, lamports: sol });
     } else if (t.side === 'buy') {
       m.boughtLamports += -sol; m.costLamports += -sol; m.heldAtomic += tokens;

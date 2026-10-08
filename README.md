@@ -328,6 +328,12 @@ The explicit, unvalidated `quote-min-output-v1` model uses:
 - **0.00001 SOL estimated network/priority fee per side**, plus **0.00203928 SOL
   estimated entry account rent**, conservatively assuming no rent refund. These
   are model assumptions, not measured transaction fees or exact account costs.
+  `quote-min-output-v2` replaced the fixed fee with the 0.000005 SOL signature fee
+  plus the priority fee Jupiter would set for that swap. `quote-min-output-v3`
+  (current) returns the account rent after a full exit, minus a 0.000005 SOL fee
+  to close the empty token account, and counts that refund in stop/target checks.
+  Partial sells get no refund because the account stays open. Positions keep the
+  model they were opened under.
 - Full-position exits at **-20% net P&L**, **+30% net P&L**, or **60 minutes**, plus
   manual close. Each exit obtains another quote after the delay, so the simulated
   fill can pass a stop/target. Positions retain their model parameters across restarts.
@@ -391,8 +397,8 @@ Two immutable experiment versions receive separate **1 virtual SOL** balances:
 
 | Version | Selection rule |
 |---|---|
-| `momentum-quality-v1` | Highest eligible opportunity score, using only that scan's market and safety inputs. |
-| `safety-feed-v1` | First eligible safety-passing token in original provider feed order, with positive price and liquidity. |
+| `momentum-quality-v3` | Highest eligible opportunity score, using only that scan's market and safety inputs. |
+| `safety-feed-v3` | First eligible safety-passing token in original provider feed order, with positive price and liquidity. |
 
 Both use **0.01 SOL entries**, **100 bps slippage**, at most **3 open positions**
 per account, one attempted entry per feed scan, and a **24h per-coin cooldown**

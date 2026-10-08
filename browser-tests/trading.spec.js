@@ -125,7 +125,7 @@ async function installApiFixtures(page, scenario = {}) {
   const researchSettings = { scanning: true, autoPaper: false };
   const paperPortfolio = () => ({
     account: { initial: '1000000000', cash: paperPosition ? '987950720' : '1000000000' },
-    model: { version: 'quote-min-output-v2', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto', entryRentLamports: '2039280', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000 },
+    model: { version: 'quote-min-output-v3', latencyMs: 1000, baseFeeLamports: '5000', priorityFee: 'jupiter-auto', entryRentLamports: '2039280', closeAccountFeeLamports: '5000', stopLossPct: -20, takeProfitPct: 30, maxHoldMs: 3600000 },
     positions: paperPosition ? [paperPosition] : [],
     stats: { open: paperPosition?.state === 'open' ? 1 : 0, closed: paperPosition?.state === 'closed' ? 1 : 0, wins: 0,
       realisedPnlLamports: paperPosition?.realisedPnlLamports || '0', equityLamports: null, netPnlLamports: null },
@@ -142,7 +142,7 @@ async function installApiFixtures(page, scenario = {}) {
         settings: researchSettings, serviceEnabled: true, schedulerError: null, intervalMs: 120000, at: Date.now(),
         policy: { amountSol: 0.01, maxPositions: 3, cooldownMs: 86400000 },
         jobs: [{ source: 'trending', next_at: Date.now() + 120000, lease_until: 0, last_at: Date.now(), failures: 0, last_error: null }],
-        accounts: ['momentum-quality-v2', 'safety-feed-v2'].map(id => ({ id, startedAt: Date.now(),
+        accounts: ['momentum-quality-v3', 'safety-feed-v3'].map(id => ({ id, startedAt: Date.now(),
           portfolio: { ...paperPortfolio(), positions: [], stats: { ...paperPortfolio().stats, open: 0, closed: 0, realisedPnlLamports: '0', netPnlLamports: '0' } },
           decisionCounts: [], metrics: { closed: 0, wins: 0, winRatePct: null, netExpectancySol: null, profitFactor: null, noLosingTrades: false,
             maxObservedDrawdownPct: null, missingEquitySamples: 0, evaluation: 'Insufficient sample' },
@@ -548,8 +548,8 @@ test('research controls persist pauses and clearly separate virtual comparison f
   await page.getByRole('button', { name: 'Research', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Resume background scans' })).toBeVisible();
   await expect(panel.getByText('Scans: paused · Automatic paper entries: paused', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('cell', { name: /momentum-quality-v2/ })).toBeVisible();
-  await expect(panel.getByRole('cell', { name: /safety-feed-v2/ })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /momentum-quality-v3/ })).toBeVisible();
+  await expect(panel.getByRole('cell', { name: /safety-feed-v3/ })).toBeVisible();
   await expect(panel.getByText('Too few trades to judge: 0 of 30 closed.', { exact: true })).toHaveCount(2);
   const record = page.getByRole('region', { name: 'Live trade record', exact: true });
   await expect(record.getByText('-0.001000 SOL').first()).toBeVisible();

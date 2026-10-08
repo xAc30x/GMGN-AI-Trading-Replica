@@ -381,7 +381,7 @@ export interface PaperPosition {
 }
 export interface PaperPortfolioResponse {
   account: { initial: string; cash: string };
-  model: { version: string; latencyMs: number; baseFeeLamports: string; priorityFee: 'jupiter-auto'; entryRentLamports: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
+  model: { version: string; latencyMs: number; baseFeeLamports: string; priorityFee: 'jupiter-auto'; entryRentLamports: string; closeAccountFeeLamports?: string; stopLossPct: number; takeProfitPct: number; maxHoldMs: number };
   positions: PaperPosition[];
   stats: { open: number; closed: number; wins: number; realisedPnlLamports: string; equityLamports: string | null; netPnlLamports: string | null };
   workerError: string | null; monitoringEnabled: boolean; at: number;

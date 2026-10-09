@@ -135,3 +135,10 @@ export async function marketSnapshots(mints) {
   if (!mints.length) return [];
   return summarizePairs(await dsJson(`/tokens/v1/solana/${mints.join(',')}`), mints);
 }
+
+/** Market cap in USD per mint, from the deepest-liquidity pair. Mints without a known market cap are left out. */
+export async function marketCapsUsd(mints) {
+  const caps = {};
+  for (const snapshot of await marketSnapshots(mints)) if (snapshot.marketCapUsd > 0) caps[snapshot.mint] = snapshot.marketCapUsd;
+  return caps;
+}

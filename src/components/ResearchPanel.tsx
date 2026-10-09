@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { closePaperPosition, fetchPaperPortfolio, fetchScanHistory, refreshPaperPortfolio,
   type PaperPortfolioResponse, type ScanHistoryResponse } from '../api';
 import { SELL_PERCENTS } from '../sellPercents';
+import { paperMarkView } from '../pnl';
+import { marketCapView } from '../format';
 
 const sol = (v: string | null | undefined) => v == null ? '—' : (Number(v) / 1e9).toFixed(6);
 export function ResearchPanel({ version }: { version: number }) {
@@ -63,12 +65,14 @@ export function ResearchPanel({ version }: { version: number }) {
         <div className="table-wrap"><table className="screen"><thead><tr><th>Token</th><th>Status</th><th>Cost held</th><th>Net P&amp;L</th><th>Exit / action</th></tr></thead>
           <tbody>{portfolio.positions.length === 0 && <tr><td colSpan={5}>No paper positions. Select a coin in PAPER to start tracking.</td></tr>}
             {portfolio.positions.map(p => {
-              const fresh = p.mark && !p.lastError && clock - p.mark.at <= 45000;
+              const view = p.state === 'open' ? paperMarkView(p.mark, p.costLamports, p.lastError, clock) : null;
+              const cap = p.state === 'open' ? marketCapView(p.entryMarketCapUsd, p.marketCap, clock) : null;
               return <tr key={p.id}><td title={p.mint}>{p.symbol}<div className="meta">{new Date(p.openedAt).toLocaleString()}</div></td>
                 <td>{p.state}{p.exitPending && <div className="meta">Exit pending: {p.exitPending}</div>}{p.lastError && <div className="safe-bad">{p.lastError}</div>}</td>
                 <td>{sol(p.costLamports)} SOL{p.partialExits?.length ? <div className="meta">after {p.partialExits.length} partial sell{p.partialExits.length > 1 ? 's' : ''}</div> : null}</td>
-                <td>{p.state === 'closed' ? `${sol(p.realisedPnlLamports)} SOL`
-                  : fresh ? `${p.mark!.pnlPct.toFixed(2)}%` : 'Awaiting fresh quote'}
+                <td>{view ? <><span className={`pnl${view.tone ? ` ${view.tone}` : ''}`}>{view.text}</span><div className="meta">{view.detail}</div>
+                  {cap && <div className={`meta mc${cap.tone ? ` ${cap.tone}` : ''}`}>{cap.text}</div>}</>
+                  : `${sol(p.realisedPnlLamports)} SOL`}
                   {p.state === 'open' && p.realisedPnlLamports != null && <div className="meta">Realized so far {sol(p.realisedPnlLamports)} SOL</div>}</td>
                 <td>{p.state === 'closed' ? p.exitReason : <div className="sell-pcts" role="group" aria-label={`Sell paper ${p.symbol}`}>
                   {SELL_PERCENTS.map(pct => <button key={pct} type="button" className="btn-ghost" disabled={busy || !portfolio.monitoringEnabled || (pct < 100 && Boolean(p.exitPending))}

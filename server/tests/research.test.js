@@ -24,9 +24,11 @@ function fixture(t, options = {}) {
   let sell = '50000000';
   let broken = false;
   let blocked = false;
+  let caps = async () => ({ [mint]: 120000 });
   const calls = [];
   const engineOptions = {
     now: () => at, sleep: async ms => { at += ms; },
+    marketCaps: mints => caps(mints),
     // 5000 signature fee + 5000 priority fee keeps the per-side fee at 10000 lamports.
     priorityFee: async () => '5000',
     safety: async () => ({ ok: !blocked, blockers: blocked ? ['Unsafe mint'] : [] }),
@@ -43,7 +45,8 @@ function fixture(t, options = {}) {
   };
   return { engine: createPaperEngine(engineOptions), engineOptions, calls,
     time: () => at, advance: ms => { at += ms; }, price: value => { sell = value; },
-    broken: value => { broken = value; }, blocked: value => { blocked = value; } };
+    broken: value => { broken = value; }, blocked: value => { blocked = value; },
+    marketCaps: fn => { caps = fn; } };
 }
 // v3: a full exit closes the empty token account, returning the entry rent minus the close fee.
 const REFUND = 2039280 - 5000;
@@ -337,4 +340,46 @@ test('a partial sell that overlaps a full exit is rejected; the exit credits the
   assert.equal(p.positions[0].partialExits, undefined);
   assert.equal(p.positions[0].realisedPnlLamports, String(-3054280 + REFUND));
   assert.equal(p.account.cash, String(996945720 + REFUND));
+});
+
+test('market cap is saved at entry and updated on each refresh', async t => {
+  const f = fixture(t);
+  const opened = await f.engine.open(entry);
+  assert.equal(opened.entryMarketCapUsd, 120000);
+  assert.deepEqual(opened.marketCap, { usd: 120000, at: f.time() });
+  f.marketCaps(async mints => { assert.deepEqual(mints, [mint]); return { [mint]: 135000 }; });
+  f.advance(15000);
+  await f.engine.refresh();
+  const [position] = paperPortfolio(f.time()).positions;
+  assert.equal(position.entryMarketCapUsd, 120000);
+  assert.deepEqual(position.marketCap, { usd: 135000, at: f.time() });
+});
+
+test('a failed market cap lookup never blocks an entry, a mark or a stop-loss exit', async t => {
+  const f = fixture(t);
+  f.marketCaps(async () => { throw new Error('DexScreener HTTP 429'); });
+  const opened = await f.engine.open(entry);
+  assert.equal(opened.entryMarketCapUsd, null);
+  assert.equal(opened.marketCap, null);
+  await f.engine.refresh();
+  let [position] = paperPortfolio(f.time()).positions;
+  assert.equal(position.state, 'open');
+  assert.equal(position.lastError, null);
+  assert.ok(position.mark);
+  f.marketCaps(async () => ({}));
+  f.price('10000000');
+  await f.engine.refresh();
+  [position] = paperPortfolio(f.time()).positions;
+  assert.equal(position.state, 'closed');
+  assert.equal(position.exitReason, 'stop_loss');
+});
+
+test('an unknown market cap keeps the last known one with its original time', async t => {
+  const f = fixture(t);
+  await f.engine.open(entry);
+  const savedAt = f.time();
+  f.marketCaps(async () => ({ [mint]: Number.NaN }));
+  f.advance(15000);
+  await f.engine.refresh();
+  assert.deepEqual(paperPortfolio(f.time()).positions[0].marketCap, { usd: 120000, at: savedAt });
 });

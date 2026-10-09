@@ -1,6 +1,7 @@
 import { withResearch, transaction } from './researchStore.js';
 import { SOL_MINT, getQuote, assertQuoteMatches, solToLamports, clampSlippageBps, jupiterPriorityFee } from './jupiterSol.js';
 import { assessMint } from './mintSafety.js';
+import { marketCapsUsd } from './discovery.js';
 
 // v2 charges each side the 5000-lamport signature fee plus the priority fee Jupiter would set for
 // that live swap. v1 positions (fixed feeLamports per side) keep their original fee when they exit.
@@ -17,6 +18,10 @@ const sideFee = (model, priorityFeeLamports) => usesFixedFee(model)
 /** SOL returned by closing the empty token account after a full exit; zero for models without the close. */
 const rentRefund = model => model.closeAccountFeeLamports === undefined
   ? 0n : BigInt(model.entryRentLamports) - BigInt(model.closeAccountFeeLamports);
+const capOf = (caps, mint) => {
+  const value = caps?.[mint];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+};
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const event = (db, at, id, kind, data, accountId) => db.prepare('INSERT INTO paper_events (at, position_id, kind, data, account_id) VALUES (?, ?, ?, ?, ?)')
   .run(at, id, kind, JSON.stringify(data), accountId);
@@ -59,8 +64,14 @@ export function paperPortfolio(now = Date.now(), accountId = 'manual') {
 
 export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPriorityFee, safety = assessMint, now = () => Date.now(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), maxAmount = () => 0.05,
-  model = PAPER_MODEL, accountId = 'manual', maxPositions = 5, cooldownMs = 0, canOpen = () => true } = {}) {
+  model = PAPER_MODEL, accountId = 'manual', maxPositions = 5, cooldownMs = 0, canOpen = () => true,
+  marketCaps = marketCapsUsd } = {}) {
   const recordEvent = (db, at, id, kind, data) => event(db, at, id, kind, data, accountId);
+  // Market cap is shown to people only. A failed lookup leaves it unknown and never blocks an entry, mark or exit.
+  const readMarketCaps = async mints => {
+    if (!mints.length) return {};
+    try { return await marketCaps(mints); } catch { return {}; }
+  };
   let refreshing = null;
   const closing = new Map();
   const partials = new Set();
@@ -91,8 +102,10 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
     try {
       const assessment = await safety(mint);
       if (!assessment.ok) fail(`Paper entry blocked: ${assessment.blockers?.[0] || 'safety check failed'}`);
+      const entryCaps = readMarketCaps([mint]);
       await sleep(model.latencyMs);
       const q = await freshQuote(SOL_MINT, mint, String(lamports), slip);
+      const entryMarketCapUsd = capOf(await entryCaps, mint);
       const entryPriorityFee = usesFixedFee(model) ? '0' : await priorityFee(q);
       const cost = lamports + sideFee(model, entryPriorityFee) + BigInt(model.entryRentLamports);
       return withResearch(db => transaction(db, () => {
@@ -112,6 +125,7 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
           requestedAt, openedAt: now(), amountLamports: String(lamports), costLamports: String(cost),
           quantityAtomic: q.otherAmountThreshold, slippageBps: slip, model: { ...model }, entryPriorityFeeLamports: entryPriorityFee,
           observationId: observationId ?? observation?.id ?? null, entryQuote: q, entrySafety: assessment,
+          entryMarketCapUsd, marketCap: entryMarketCapUsd === null ? null : { usd: entryMarketCapUsd, at: now() },
           mark: null, lastError: null, exitPending: null };
         db.prepare('INSERT INTO paper_positions (id, mint, state, created_at, data, account_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, mint, 'open', p.openedAt, JSON.stringify(p), accountId);
         setCash(db, accountId, cash - cost);
@@ -228,6 +242,8 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
 
   async function tick() {
     const positions = withResearch(db => db.prepare("SELECT data FROM paper_positions WHERE state='open' AND account_id=?").all(accountId).map(r => JSON.parse(r.data)));
+    // Looked up alongside the quotes and saved after them, so exits never wait for it.
+    const caps = readMarketCaps([...new Set(positions.map(p => p.mint))]);
     for (const p of positions) {
       try {
         if (p.exitPending) { await close(p.id, p.exitPending); continue; }
@@ -252,6 +268,16 @@ export function createPaperEngine({ quote = getQuote, priorityFee = jupiterPrior
         }));
       }
     }
+    const found = await caps;
+    withResearch(db => transaction(db, () => {
+      for (const p of positions) {
+        const usd = capOf(found, p.mint);
+        const current = usd === null ? null : readPosition(db, p.id, accountId);
+        if (current?.state !== 'open') continue;
+        current.marketCap = { usd, at: now() };
+        save(db, current);
+      }
+    }));
     return paperPortfolio(now(), accountId);
   }
   function refresh() {

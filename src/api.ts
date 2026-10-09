@@ -398,6 +398,10 @@ export interface PaperPosition {
   partialExits?: { at: number; percent: number; quantityAtomic: string; proceedsLamports: string; realisedPnlLamports: string }[];
   closedAt?: number; exitReason?: string; exitPending: string | null; lastError: string | null;
   mark: { at: number; netLamports: string; pnlPct: number } | null;
+  /** USD market cap when opened; missing on older positions or when the lookup failed. */
+  entryMarketCapUsd?: number | null;
+  /** Latest USD market cap and when it was read. */
+  marketCap?: { usd: number; at: number } | null;
 }
 export interface PaperPortfolioResponse {
   account: { initial: string; cash: string };

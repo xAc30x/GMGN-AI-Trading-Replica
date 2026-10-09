@@ -2231,6 +2231,9 @@ table.screen tr:hover td {
 
 .research-panel .help { font-size: 12px; line-height: 1.6; color: #b7b0a2; }
 .research-panel table.screen { min-width: 640px; }
+.research-panel .pnl { font-family: var(--mono); font-weight: 700; }
+.research-panel .pnl.pos { color: var(--lime); }
+.research-panel .pnl.neg { color: var(--red); }
 .sell-pcts { display: flex; flex-wrap: wrap; gap: 4px; }
 .sell-pcts .btn-ghost { padding: 5px 8px; font-size: 12px; }
 

@@ -37,7 +37,7 @@ function fixture(t, options = {}) {
   const scan = createDiscoveryScanner({ now, minLiquidity: 1000,
     discover: async () => { scans++; return [weak, strong]; }, safety: async () => ({ ok: true }) });
   const params = { scan, now, enabled: () => enabled, intervalMs: 120000,
-    engineOptions: { quote, priorityFee: async () => '5000', safety: async () => ({ ok: true }), sleep: async () => {} }, ...options };
+    engineOptions: { quote, priorityFee: async () => '5000', safety: async () => ({ ok: true }), sleep: async () => {}, marketCaps: async () => ({}) }, ...options };
   return { runner: createResearchAutomation(params), params, quote, now,
     advance: n => { at += n; }, enable: value => { enabled = value; }, scans: () => scans,
     sell: value => { sell = value; } };

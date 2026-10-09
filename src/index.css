@@ -2234,6 +2234,8 @@ table.screen tr:hover td {
 .research-panel .pnl { font-family: var(--mono); font-weight: 700; }
 .research-panel .pnl.pos { color: var(--lime); }
 .research-panel .pnl.neg { color: var(--red); }
+.research-panel .meta.mc.pos { color: var(--lime); }
+.research-panel .meta.mc.neg { color: var(--red); }
 .sell-pcts { display: flex; flex-wrap: wrap; gap: 4px; }
 .sell-pcts .btn-ghost { padding: 5px 8px; font-size: 12px; }
 
